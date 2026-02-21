@@ -48,6 +48,34 @@ object CameraHook {
         ModuleMain.log("Camera Surface Hijacking hooks set up for $targetPackage")
     }
 
+    private fun createDummySurface(): Surface {
+        val dummySurfaceTexture = SurfaceTexture(10)
+        dummySurfaceTexture.setDefaultBufferSize(1920, 1080) // Prevents 0x0 Crash
+        return Surface(dummySurfaceTexture)
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun swapSurfaceInOutputConfig(config: Any, dummySurface: Surface) {
+        try {
+            val mSurfacesField = XposedHelpers.findField(config.javaClass, "mSurfaces")
+            val surfaces = mSurfacesField.get(config) as? java.util.ArrayList<Surface>
+            if (surfaces != null) {
+                surfaces.clear()
+                surfaces.add(dummySurface)
+                return
+            }
+        } catch (e: Throwable) {
+            // Fallback for older API levels
+        }
+        
+        try {
+            val mSurfaceField = XposedHelpers.findField(config.javaClass, "mSurface")
+            mSurfaceField.set(config, dummySurface)
+        } catch (e: Throwable) {
+            ModuleMain.log("Failed to swap surface in OutputConfig: ${e.message}")
+        }
+    }
+
     /**
      * Poll configuration via ContentProvider
      */
@@ -108,10 +136,7 @@ object CameraHook {
                             
                             for (targetSurface in surfacesList) {
                                 targetSurfaces.add(targetSurface)
-                                
-                                val dummySurfaceTexture = SurfaceTexture(10)
-                                val dummySurface = Surface(dummySurfaceTexture)
-                                newSurfaces.add(dummySurface)
+                                newSurfaces.add(createDummySurface())
                             }
                             
                             param.args[0] = newSurfaces
@@ -151,7 +176,6 @@ object CameraHook {
                         if (configs.isNotEmpty()) {
                             ModuleMain.log("Intercepted createCaptureSessionByOutputConfigurations - count: ${configs.size}")
                             
-                            val newConfigs = ArrayList<Any>()
                             val targetSurfaces = ArrayList<Surface>()
                             
                             for (config in configs) {
@@ -162,18 +186,9 @@ object CameraHook {
                                 
                                 if (targetSurface != null) {
                                     targetSurfaces.add(targetSurface)
-                                    
-                                    val dummySurfaceTexture = SurfaceTexture(10)
-                                    val dummySurface = Surface(dummySurfaceTexture)
-                                    
-                                    val newConfig = XposedHelpers.newInstance(config.javaClass, dummySurface)
-                                    newConfigs.add(newConfig)
-                                } else {
-                                    newConfigs.add(config)
+                                    swapSurfaceInOutputConfig(config, createDummySurface())
                                 }
                             }
-                            
-                            param.args[0] = newConfigs
                             
                             startRenderThreads(targetSurfaces)
                             obfuscateStackTrace()
@@ -214,6 +229,7 @@ object CameraHook {
                                     
                                     if (targetSurface != null) {
                                         targetSurfaces.add(targetSurface)
+                                        swapSurfaceInOutputConfig(config, createDummySurface())
                                     }
                                 }
                                 
