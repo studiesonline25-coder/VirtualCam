@@ -171,7 +171,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:hint="RTSP/RTMP URL (e.g. rtsp://192.168.1.10:8554/live)"
-                    app:boxBackgroundColor="@color/card_background"
+                    app:boxBackgroundColor="@color/card_dark"
                     app:boxStrokeColor="@color/text_secondary"
                     android:layout_marginBottom="16dp">
                     
