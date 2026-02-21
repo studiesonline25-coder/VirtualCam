@@ -59,11 +59,18 @@ object CameraHook {
             
             cursor?.use {
                 if (it.moveToFirst()) {
-                    isEnabled = it.getInt(0) == 1
-                    isVideo = it.getInt(2) == 1
-                    isStream = it.getInt(3) == 1
-                    streamUrl = it.getString(4) ?: ""
-                    ModuleMain.log("Config loaded. Enabled: $isEnabled, IsVideo: $isVideo, IsStream: $isStream")
+                    try {
+                        isEnabled = it.getInt(0) == 1
+                        
+                        // Default values for missing columns in older DB versions
+                        isVideo = if (it.columnCount > 2) it.getInt(2) == 1 else false
+                        isStream = if (it.columnCount > 3) it.getInt(3) == 1 else false
+                        streamUrl = if (it.columnCount > 4) it.getString(4) ?: "" else ""
+                        
+                        ModuleMain.log("Config loaded. Enabled: $isEnabled, IsVideo: $isVideo, IsStream: $isStream")
+                    } catch (innerE: Exception) {
+                        ModuleMain.log("Error parsing cursor columns: ${innerE.message}")
+                    }
                 }
             }
         } catch (e: Exception) {
