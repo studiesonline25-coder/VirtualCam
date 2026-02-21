@@ -32,7 +32,7 @@ object CameraHook {
     private var streamUrl: String = ""
     private var targetPackage: String = ""
     
-    private var renderThread: VirtualRenderThread? = null
+    private val renderThreads = mutableListOf<VirtualRenderThread>()
 
     /**
      * Initialize all camera hooks
@@ -95,24 +95,32 @@ object CameraHook {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     if (!isEnabled) return
 
-                    val args = param.args
-                    if (args.isEmpty() || args[0] !is List<*>) return
+                    try {
+                        val args = param.args
+                        if (args.isEmpty() || args[0] !is List<*>) return
 
-                    val surfacesList = args[0] as List<Surface>
-                    if (surfacesList.isNotEmpty()) {
-                        ModuleMain.log("Intercepted createCaptureSession (Surface list)")
-                        val targetSurface = surfacesList[0]
-                        
-                        // Replace with dummy surface for hardware camera
-                        val dummySurfaceTexture = SurfaceTexture(10)
-                        val dummySurface = Surface(dummySurfaceTexture)
-                        
-                        val newSurfaces = ArrayList<Surface>()
-                        newSurfaces.add(dummySurface)
-                        param.args[0] = newSurfaces
-                        
-                        startRenderThread(targetSurface)
-                        obfuscateStackTrace()
+                        val surfacesList = args[0] as List<Surface>
+                        if (surfacesList.isNotEmpty()) {
+                            ModuleMain.log("Intercepted createCaptureSession (Surface list) - count: ${surfacesList.size}")
+                            
+                            val newSurfaces = ArrayList<Surface>()
+                            val targetSurfaces = ArrayList<Surface>()
+                            
+                            for (targetSurface in surfacesList) {
+                                targetSurfaces.add(targetSurface)
+                                
+                                val dummySurfaceTexture = SurfaceTexture(10)
+                                val dummySurface = Surface(dummySurfaceTexture)
+                                newSurfaces.add(dummySurface)
+                            }
+                            
+                            param.args[0] = newSurfaces
+                            
+                            startRenderThreads(targetSurfaces)
+                            obfuscateStackTrace()
+                        }
+                    } catch (t: Throwable) {
+                        ModuleMain.log("Error in createCaptureSession hook: ${t.message}")
                     }
                 }
             }
@@ -135,34 +143,43 @@ object CameraHook {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     if (!isEnabled) return
                     
-                    val args = param.args
-                    if (args.isEmpty() || args[0] !is List<*>) return
-                    
-                    val configs = args[0] as List<*>
-                    if (configs.isNotEmpty()) {
-                        ModuleMain.log("Intercepted createCaptureSessionByOutputConfigurations")
-                        val config = configs[0] ?: return
+                    try {
+                        val args = param.args
+                        if (args.isEmpty() || args[0] !is List<*>) return
                         
-                        try {
-                            val getSurfaceMethod = config.javaClass.getMethod("getSurface")
-                            val targetSurface = getSurfaceMethod.invoke(config) as? Surface ?: return
+                        val configs = args[0] as List<*>
+                        if (configs.isNotEmpty()) {
+                            ModuleMain.log("Intercepted createCaptureSessionByOutputConfigurations - count: ${configs.size}")
                             
-                            // Re-create dummy config
-                            val dummySurfaceTexture = SurfaceTexture(10)
-                            val dummySurface = Surface(dummySurfaceTexture)
-                            
-                            val newConfig = XposedHelpers.newInstance(config.javaClass, dummySurface)
                             val newConfigs = ArrayList<Any>()
-                            newConfigs.add(newConfig)
+                            val targetSurfaces = ArrayList<Surface>()
+                            
+                            for (config in configs) {
+                                if (config == null) continue
+                                
+                                val getSurfaceMethod = config.javaClass.getMethod("getSurface")
+                                val targetSurface = getSurfaceMethod.invoke(config) as? Surface
+                                
+                                if (targetSurface != null) {
+                                    targetSurfaces.add(targetSurface)
+                                    
+                                    val dummySurfaceTexture = SurfaceTexture(10)
+                                    val dummySurface = Surface(dummySurfaceTexture)
+                                    
+                                    val newConfig = XposedHelpers.newInstance(config.javaClass, dummySurface)
+                                    newConfigs.add(newConfig)
+                                } else {
+                                    newConfigs.add(config)
+                                }
+                            }
                             
                             param.args[0] = newConfigs
                             
-                            startRenderThread(targetSurface)
+                            startRenderThreads(targetSurfaces)
                             obfuscateStackTrace()
-                            
-                        } catch (e: Exception) {
-                            ModuleMain.log("Error extracting OutputConfiguration surface: ${e.message}")
                         }
+                    } catch (t: Throwable) {
+                        ModuleMain.log("Error in createCaptureSessionByOutputConfigurations hook: ${t.message}")
                     }
                 }
             }
@@ -175,50 +192,54 @@ object CameraHook {
             object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     if (!isEnabled) return
-                    val args = param.args
-                    if (args.isEmpty()) return
                     
-                    val sessionConfig = args[0]
-                    if (sessionConfig != null && sessionConfig.javaClass.simpleName == "SessionConfiguration") {
-                        try {
+                    try {
+                        val args = param.args
+                        if (args.isEmpty()) return
+                        
+                        val sessionConfig = args[0]
+                        if (sessionConfig != null && sessionConfig.javaClass.simpleName == "SessionConfiguration") {
                             val getOutputConfigsMethod = sessionConfig.javaClass.getMethod("getOutputConfigurations")
                             val configs = getOutputConfigsMethod.invoke(sessionConfig) as? List<*>
                             
                             if (!configs.isNullOrEmpty()) {
-                                ModuleMain.log("Intercepted SessionConfiguration")
-                                val config = configs[0] ?: return
-                                val getSurfaceMethod = config.javaClass.getMethod("getSurface")
-                                val targetSurface = getSurfaceMethod.invoke(config) as? Surface ?: return
+                                ModuleMain.log("Intercepted SessionConfiguration - count: ${configs.size}")
                                 
-                                val dummySurfaceTexture = SurfaceTexture(10)
-                                val dummySurface = Surface(dummySurfaceTexture)
-                                val newConfig = XposedHelpers.newInstance(config.javaClass, dummySurface)
-                                val newConfigs = ArrayList<Any>()
-                                newConfigs.add(newConfig)
+                                val targetSurfaces = ArrayList<Surface>()
                                 
-                                // We cannot easily replace the read-only list in SessionConfiguration, 
-                                // but we might reflectively modify its internal field depending on API level.
-                                // For simplicity, we just start the render thread for the target surface.
-                                // NOTE: A full professional impl would reflectively set the internal mOutputConfigurations list.
+                                for (config in configs) {
+                                    if (config == null) continue
+                                    val getSurfaceMethod = config.javaClass.getMethod("getSurface")
+                                    val targetSurface = getSurfaceMethod.invoke(config) as? Surface
+                                    
+                                    if (targetSurface != null) {
+                                        targetSurfaces.add(targetSurface)
+                                    }
+                                }
                                 
-                                startRenderThread(targetSurface)
+                                startRenderThreads(targetSurfaces)
                                 obfuscateStackTrace()
                             }
-                        } catch (e: Exception) {
-                            ModuleMain.log("Error overriding SessionConfiguration: ${e.message}")
                         }
+                    } catch (t: Throwable) {
+                        ModuleMain.log("Error overriding SessionConfiguration: ${t.message}")
                     }
                 }
             }
         )
     }
 
-    private fun startRenderThread(targetSurface: Surface) {
-        renderThread?.quit()
+    private fun startRenderThreads(targetSurfaces: List<Surface>) {
+        renderThreads.forEach { it.quit() }
+        renderThreads.clear()
+        
         val context = AndroidAppHelper.currentApplication() ?: return
         
-        renderThread = VirtualRenderThread(targetSurface, context, isVideo, isStream, streamUrl).apply {
-            start()
+        for (surface in targetSurfaces) {
+            val thread = VirtualRenderThread(surface, context, isVideo, isStream, streamUrl).apply {
+                start()
+            }
+            renderThreads.add(thread)
         }
     }
     
@@ -330,8 +351,8 @@ class VirtualRenderThread(
                     }
                 }
             }
-        } catch (e: Exception) {
-            ModuleMain.log("Render thread error: ${e.message}")
+        } catch (t: Throwable) {
+            ModuleMain.log("Render thread error: ${t.message}")
         } finally {
             mediaSurface?.release()
             mediaSurfaceTexture?.release()

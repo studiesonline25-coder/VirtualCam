@@ -3,6 +3,7 @@ package com.virtucam.media
 import android.content.Context
 import android.net.Uri
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
 import android.util.Log
 import android.view.Surface
@@ -29,16 +30,21 @@ class StreamPlayer(
     }
 
     private var exoPlayer: ExoPlayer? = null
-    private val handler = Handler(Looper.getMainLooper())
+    private var handlerThread: HandlerThread? = null
+    private var handler: Handler? = null
 
     /**
      * Start connecting to the live stream
      */
     fun start() {
-        handler.post {
+        handlerThread = HandlerThread("VirtuCam-StreamPlayer")
+        handlerThread?.start()
+        handler = Handler(handlerThread!!.looper)
+        
+        handler?.post {
             try {
                 initializePlayer()
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 Log.e(TAG, "Failed to initialize StreamPlayer", e)
             }
         }
@@ -99,13 +105,17 @@ class StreamPlayer(
      * Stop and release the player
      */
     fun stop() {
-        handler.post {
+        handler?.post {
             try {
                 exoPlayer?.stop()
                 exoPlayer?.release()
                 exoPlayer = null
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 Log.e(TAG, "Error releasing StreamPlayer", e)
+            } finally {
+                handlerThread?.quitSafely()
+                handlerThread = null
+                handler = null
             }
         }
     }
