@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">VirtualCam</string>
+    <string name="app_description">Virtual camera for pranks</string>
+    
+    <!-- Main Screen -->
+    <string name="title_select_image">Select Spoof Media</string>
+    <string name="title_target_apps">Target Apps</string>
+    <string name="btn_pick_image">Pick Media</string>
+    <string name="btn_pick_video">Pick Video</string>
+    <string name="status_enabled">VirtualCam is ENABLED</string>
+    <string name="status_disabled">VirtualCam is DISABLED</string>
+    <string name="status_no_image">No media selected</string>
+    <string name="status_image_ready">Media ready: %s</string>
+    
+    <!-- Settings -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_hook_all">Hook all camera apps</string>
+    <string name="settings_show_preview">Show preview overlay</string>
+    
+    <!-- Instructions -->
+    <string name="instructions_title">How to Use</string>
+    <string name="instructions_step1">1. Select a scary image or video</string>
+    <string name="instructions_step2">2. Choose which apps to prank</string>
+    <string name="instructions_step3">3. Use LSPatch to patch target apps</string>
+    <string name="instructions_step4">4. Open patched app and scare your friends!</string>
+    
+    <!-- Dialogs -->
+    <string name="dialog_permission_title">Permission Required</string>
+    <string name="dialog_permission_message">Storage permission is needed to select media files</string>
+    <string name="btn_grant">Grant</string>
+    <string name="btn_cancel">Cancel</string>
+</resources>

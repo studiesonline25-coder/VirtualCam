@@ -1,0 +1,13 @@
+# Default ignored files
+/.gradle/
+/build/
+/app/build/
+*.iml
+.idea/
+local.properties
+.DS_Store
+*.apk
+*.aab
+/captures
+.externalNativeBuild
+.cxx

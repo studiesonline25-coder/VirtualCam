@@ -1,0 +1,98 @@
+package com.virtucam.data
+
+import android.content.Context
+import android.net.Uri
+import com.virtucam.VirtuCamApp
+
+/**
+ * Manages VirtuCam configuration and settings
+ * Stores the spoof media URI and target app list
+ */
+class VirtuCamConfig(context: Context) {
+    
+    private val prefs = context.getSharedPreferences(
+        VirtuCamApp.PREFS_NAME, 
+        Context.MODE_PRIVATE
+    )
+    
+    /**
+     * Whether VirtuCam is enabled
+     */
+    var isEnabled: Boolean
+        get() = prefs.getBoolean(VirtuCamApp.KEY_ENABLED, false)
+        set(value) = prefs.edit().putBoolean(VirtuCamApp.KEY_ENABLED, value).apply()
+    
+    /**
+     * URI of the media to inject as camera feed
+     */
+    var spoofMediaUri: Uri?
+        get() = prefs.getString("media_uri", null)?.let { Uri.parse(it) }
+        set(value) = prefs.edit().putString("media_uri", value?.toString()).apply()
+
+    /**
+     * Whether the selected media is a video
+     */
+    var isSpoofVideo: Boolean
+        get() = prefs.getBoolean("is_video", false)
+        set(value) = prefs.edit().putBoolean("is_video", value).apply()
+    
+    /**
+     * Whether the selected media is a live stream
+     */
+    var isStream: Boolean
+        get() = prefs.getBoolean("is_stream", false)
+        set(value) = prefs.edit().putBoolean("is_stream", value).apply()
+
+    /**
+     * URL of the live stream (RTSP/RTMP)
+     */
+    var streamUrl: String?
+        get() = prefs.getString("stream_url", null)
+        set(value) = prefs.edit().putString("stream_url", value).apply()
+    
+    /**
+     * List of package names for apps to target
+     */
+    var targetApps: Set<String>
+        get() = prefs.getStringSet(VirtuCamApp.KEY_TARGET_APPS, emptySet()) ?: emptySet()
+        set(value) = prefs.edit().putStringSet(VirtuCamApp.KEY_TARGET_APPS, value).apply()
+    
+    /**
+     * Add a target app
+     */
+    fun addTargetApp(packageName: String) {
+        targetApps = targetApps + packageName
+    }
+    
+    /**
+     * Remove a target app
+     */
+    fun removeTargetApp(packageName: String) {
+        targetApps = targetApps - packageName
+    }
+    
+    /**
+     * Check if an app is targeted
+     */
+    fun isAppTargeted(packageName: String): Boolean {
+        return targetApps.isEmpty() || packageName in targetApps
+    }
+    
+    /**
+     * Clear all settings
+     */
+    fun clear() {
+        prefs.edit().clear().apply()
+    }
+    
+    companion object {
+        @Volatile
+        private var INSTANCE: VirtuCamConfig? = null
+        
+        fun getInstance(context: Context): VirtuCamConfig {
+            return INSTANCE ?: synchronized(this) {
+                INSTANCE ?: VirtuCamConfig(context.applicationContext).also { INSTANCE = it }
+            }
+        }
+    }
+}
