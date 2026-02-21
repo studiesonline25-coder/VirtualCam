@@ -157,6 +157,42 @@
                     app:backgroundTint="@null"
                     app:cornerRadius="12dp" />
 
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="OBS Live Stream"
+                    android:textColor="@color/text_primary"
+                    android:textSize="18sp"
+                    android:fontFamily="sans-serif-medium"
+                    android:layout_marginTop="24dp"
+                    android:layout_marginBottom="8dp" />
+
+                <com.google.android.material.textfield.TextInputLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:hint="RTSP/RTMP URL (e.g. rtsp://192.168.1.10:8554/live)"
+                    app:boxBackgroundColor="@color/card_background"
+                    app:boxStrokeColor="@color/text_secondary"
+                    android:layout_marginBottom="16dp">
+                    
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/etStreamUrl"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:inputType="textUri"
+                        android:textColor="@color/text_primary" />
+                </com.google.android.material.textfield.TextInputLayout>
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnUseStream"
+                    android:layout_width="match_parent"
+                    android:layout_height="56dp"
+                    android:text="Use Live Stream"
+                    android:textColor="@color/text_primary"
+                    android:background="@drawable/gradient_button"
+                    app:backgroundTint="@null"
+                    app:cornerRadius="12dp" />
+
             </LinearLayout>
 
         </androidx.cardview.widget.CardView>
