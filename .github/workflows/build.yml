@@ -8,6 +8,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
     - uses: actions/checkout@v4
@@ -38,3 +40,19 @@ jobs:
       with:
         name: VirtualCam-Release
         path: app/build/outputs/apk/release/*.apk
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v${{ github.run_number }}
+        name: VirtualCam v${{ github.run_number }}
+        files: |
+          app/build/outputs/apk/debug/*.apk
+          app/build/outputs/apk/release/*.apk
+        body: |
+          ### VirtuCam V3 - Android 15 Release
+          - **Release APK**: Signed with debug key (Ready to install)
+          - **Debug APK**: Standard development build
+          - Includes: RTSP low-latency, Ultra-low buffer, Multi-Surface support.
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
