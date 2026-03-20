@@ -1,5 +1,6 @@
 package com.virtucam
 
+import android.util.Log
 import de.robv.android.xposed.IXposedHookLoadPackage
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.callbacks.XC_LoadPackage
@@ -14,32 +15,25 @@ import com.virtucam.hooks.CameraHook
 class ModuleMain : IXposedHookLoadPackage {
     
     companion object {
-        const val TAG = "VirtuCam"
+        const val TAG = "VirtuCam_Main"
         
-        fun log(message: String) {
-            XposedBridge.log("[$TAG] $message")
+        init {
+            Log.d(TAG, "VirtuCam_Main: ENTRY POINT LOADED INTO MEMORY")
         }
     }
     
     override fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
+        // Skip our own app
+        if (lpparam.packageName == "com.virtucam") return
+        
+        Log.d(TAG, "VirtuCam_Main: handleLoadPackage called for ${lpparam.packageName}")
+        
         try {
-            // Skip our own app
-            if (lpparam.packageName == "com.virtucam") {
-                return
-            }
-            
-            log("Attaching to: ${lpparam.packageName}")
-            
             // Initialize camera hooks with defensive catch
-            try {
-                CameraHook.init(lpparam)
-            } catch (hookError: Throwable) {
-                log("Hook initialization failed: ${hookError.message}")
-            }
-            
+            CameraHook.init(lpparam)
+            Log.d(TAG, "VirtuCam_Main: CameraHook.init() successfully called.")
         } catch (t: Throwable) {
-            // Final safety net to prevent any possible crash from bubbling up to the target app
-            XposedBridge.log("VirtuCam: Critical failure in handleLoadPackage for ${lpparam.packageName}: ${t.message}")
+            Log.e(TAG, "VirtuCam_Main: FAILED to initialize hooks for ${lpparam.packageName}", t)
         }
     }
 }

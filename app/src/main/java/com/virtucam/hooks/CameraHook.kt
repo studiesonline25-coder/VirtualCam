@@ -7,6 +7,7 @@ import android.net.Uri
 import android.opengl.GLES20
 import android.opengl.GLUtils
 import android.opengl.Matrix
+import android.util.Log
 import android.view.Surface
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
@@ -26,14 +27,14 @@ import com.virtucam.opengl.TextureRenderer
  */
 object CameraHook {
     
+    private const val TAG = "VirtuCam_Hook"
     private var isEnabled = true
     private var isVideo = false
     private var isStream = false
     private var streamUrl: String = ""
     private var targetPackage: String = ""
     
-    private val renderThreads = mutableListOf<Any>() // Use Any to avoid early class loading of VirtualRenderThread
-    
+    private val renderThreads = mutableListOf<Any>()
     private var configLoaded = false
 
     /**
@@ -42,15 +43,14 @@ object CameraHook {
     fun init(lpparam: XC_LoadPackage.LoadPackageParam) {
         try {
             targetPackage = lpparam.packageName
-            
-            // Do NOT call loadConfiguration() here. It requires a Context which isn't ready yet.
+            Log.d(TAG, "VirtuCam_Hook: Initializing hooks for $targetPackage")
             
             hookCameraDevice(lpparam)
             hookCameraDeviceOutputConfigurations(lpparam)
             
-            ModuleMain.log("Camera hooks deployed for $targetPackage")
+            Log.d(TAG, "VirtuCam_Hook: All hooks deployed successfully.")
         } catch (t: Throwable) {
-            ModuleMain.log("CRITICAL: Failed to deploy hooks in $targetPackage: ${t.message}")
+            Log.e(TAG, "VirtuCam_Hook: CRITICAL failure in $targetPackage", t)
         }
     }
 
@@ -97,7 +97,7 @@ object CameraHook {
             val mSurfaceField = XposedHelpers.findField(config.javaClass, "mSurface")
             mSurfaceField.set(config, dummySurface)
         } catch (e: Throwable) {
-            ModuleMain.log("Failed to swap surface in OutputConfig: ${e.message}")
+            Log.e(TAG, "VirtuCam_Hook: Failed to swap surface in OutputConfig", e)
         }
     }
 
@@ -120,14 +120,14 @@ object CameraHook {
                         isStream = if (it.columnCount > 3) it.getInt(3) == 1 else false
                         streamUrl = if (it.columnCount > 4) it.getString(4) ?: "" else ""
                         
-                        ModuleMain.log("Config loaded. Enabled: $isEnabled, IsVideo: $isVideo, IsStream: $isStream")
+                        Log.d(TAG, "VirtuCam_Hook: Config loaded. Enabled: $isEnabled, Stream: $isStream")
                     } catch (innerE: Exception) {
-                        ModuleMain.log("Error parsing cursor columns: ${innerE.message}")
+                        Log.e(TAG, "VirtuCam_Hook: Error parsing cursor columns", innerE)
                     }
                 }
             }
         } catch (e: Exception) {
-            ModuleMain.log("Failed to load configuration: ${e.message}")
+            Log.e(TAG, "VirtuCam_Hook: Failed to load configuration (Provider possibly blocked)", e)
         }
     }
 
@@ -156,7 +156,7 @@ object CameraHook {
 
                         val surfacesList = args[0] as List<Surface>
                         if (surfacesList.isNotEmpty()) {
-                            ModuleMain.log("Intercepted createCaptureSession - count: ${surfacesList.size}")
+                            Log.d(TAG, "VirtuCam_Hook: Intercepted createCaptureSession (Standard) - count: ${surfacesList.size}")
                             
                             val newSurfaces = ArrayList<Surface>()
                             val targetSurfaces = ArrayList<Surface>()
@@ -172,11 +172,11 @@ object CameraHook {
                             obfuscateStackTrace()
                         }
                     } catch (t: Throwable) {
-                        ModuleMain.log("Error in createCaptureSession hook: ${t.message}")
+                        Log.e(TAG, "VirtuCam_Hook: Error in createCaptureSession hook", t)
                     }
                 }
             }
-        )
+        }
     }
 
     /**
@@ -202,7 +202,7 @@ object CameraHook {
                         
                         val configs = args[0] as List<*>
                         if (configs.isNotEmpty()) {
-                            ModuleMain.log("Intercepted createCaptureSessionByOutputConfigurations - count: ${configs.size}")
+                            Log.d(TAG, "VirtuCam_Hook: Intercepted createCaptureSessionByOutputConfigurations - count: ${configs.size}")
                             
                             val targetSurfaces = ArrayList<Surface>()
                             
@@ -222,7 +222,7 @@ object CameraHook {
                             obfuscateStackTrace()
                         }
                     } catch (t: Throwable) {
-                        ModuleMain.log("Error in createCaptureSessionByOutputConfigurations hook: ${t.message}")
+                        Log.e(TAG, "VirtuCam_Hook: Error in createCaptureSessionByOutputConfigurations hook", t)
                     }
                 }
             }
@@ -247,7 +247,7 @@ object CameraHook {
                             val configs = getOutputConfigsMethod.invoke(sessionConfig) as? List<*>
                             
                             if (!configs.isNullOrEmpty()) {
-                                ModuleMain.log("Intercepted SessionConfiguration - count: ${configs.size}")
+                                Log.d(TAG, "VirtuCam_Hook: Intercepted SessionConfiguration - count: ${configs.size}")
                                 
                                 val targetSurfaces = ArrayList<Surface>()
                                 
@@ -267,7 +267,7 @@ object CameraHook {
                             }
                         }
                     } catch (t: Throwable) {
-                        ModuleMain.log("Error overriding SessionConfiguration: ${t.message}")
+                        Log.e(TAG, "VirtuCam_Hook: Error overriding SessionConfiguration", t)
                     }
                 }
             }
@@ -290,8 +290,9 @@ object CameraHook {
                 val thread = VirtualRenderThread(surface, context, isVideo, isStream, streamUrl)
                 thread.start()
                 renderThreads.add(thread)
+                Log.d(TAG, "VirtuCam_Hook: Started RenderThread for surface.")
             } catch (t: Throwable) {
-                ModuleMain.log("Failed to start RenderThread: ${t.message}")
+                Log.e(TAG, "VirtuCam_Hook: Failed to start RenderThread", t)
             }
         }
     }
@@ -405,7 +406,7 @@ class VirtualRenderThread(
                 }
             }
         } catch (t: Throwable) {
-            ModuleMain.log("Render thread error: ${t.message}")
+            Log.e("VirtuCam_Render", "Render thread error", t)
         } finally {
             mediaSurface?.release()
             mediaSurfaceTexture?.release()
