@@ -224,7 +224,7 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="1. Select a scary image or video above\n2. Enable VirtualCam with the toggle\n3. Patch target app with LSPatch\n4. Open patched app - camera shows your media!"
+                    android:text="1. Select a scary image or video above\n2. Enable VirtualCam with the toggle\n3. Patch target app with LSPatch\n4. Open patched app - camera shows your media!\n\n⚠️ Xiaomi Users: Enable 'Display pop-up windows while running in background' and 'No restrictions' battery profile for the target app."
                     android:textColor="@color/text_secondary"
                     android:textSize="14sp"
                     android:lineSpacingExtra="6dp" />

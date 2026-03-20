@@ -12,6 +12,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.rtsp.RtspMediaSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 
 /**
@@ -53,9 +54,15 @@ class StreamPlayer(
     private fun initializePlayer() {
         if (exoPlayer != null) return
 
-        // 1. Build ExoPlayer instance
+        // 1. Build ExoPlayer instance with ultra-low latency load control
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferMs(0, 500, 0, 0)
+            .setPrioritizeTimeOverSizeThresholds(true)
+            .build()
+
         exoPlayer = ExoPlayer.Builder(context)
             .setMediaSourceFactory(DefaultMediaSourceFactory(context))
+            .setLoadControl(loadControl)
             .build()
             
         // 2. Set the target OpenGL-backed Surface for rendering
