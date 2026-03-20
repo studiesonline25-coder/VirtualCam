@@ -25,7 +25,7 @@ jobs:
         cache-disabled: true
 
     - name: Build APKs
-      run: ./gradlew assembleDebug assembleRelease
+      run: gradle assembleDebug assembleRelease
 
     - name: Upload Debug APK
       uses: actions/upload-artifact@v4
