@@ -201,6 +201,7 @@ object CameraHook {
                     val holder = param.args[0] as? android.view.SurfaceHolder ?: return
                     val surface = holder.surface ?: return
                     Log.d(TAG, "VirtuCam_Hook: Intercepted setPreviewDisplay (Camera1)")
+                    stopOldPipeline()
                     startRenderThreads(listOf(surface))
                 } catch (t: Throwable) {
                     Log.e(TAG, "VirtuCam_Hook: Error in Camera1 setPreviewDisplay hook", t)
@@ -368,6 +369,8 @@ object CameraHook {
                         if (surfacesList.isNotEmpty()) {
                             Log.d(TAG, "VirtuCam_Hook: Intercepted createCaptureSession (Standard) - count: ${surfacesList.size}")
                             
+                            stopOldPipeline()
+                            
                             val newSurfaces = ArrayList<Surface>()
                             val targetSurfaces = ArrayList<Surface>()
                             
@@ -420,6 +423,8 @@ object CameraHook {
                         if (configs.isNotEmpty()) {
                             Log.d(TAG, "VirtuCam_Hook: Intercepted createCaptureSessionByOutputConfigurations - count: ${configs.size}")
                             
+                            stopOldPipeline()
+                            
                             val targetSurfaces = ArrayList<Surface>()
                             
                             for (config in configs) {
@@ -465,6 +470,8 @@ object CameraHook {
                             if (!configs.isNullOrEmpty()) {
                                 Log.d(TAG, "VirtuCam_Hook: Intercepted SessionConfiguration - count: ${configs.size}")
                                 
+                                stopOldPipeline()
+                                
                                 val targetSurfaces = ArrayList<Surface>()
                                 
                                 for (config in configs) {
@@ -490,7 +497,7 @@ object CameraHook {
         )
     }
 
-    private fun startRenderThreads(targetSurfaces: List<Surface>) {
+    private fun stopOldPipeline() {
         renderThreads.forEach { 
             try {
                 it.javaClass.getMethod("quit").invoke(it)
@@ -507,7 +514,9 @@ object CameraHook {
         dummyTextures.forEach { try { it.release() } catch (_: Throwable) {} }
         dummyTextures.clear()
         surfaceMap.clear()
-        
+    }
+
+    private fun startRenderThreads(targetSurfaces: List<Surface>) {
         val context = AndroidAppHelper.currentApplication() ?: return
         
         for (surface in targetSurfaces) {
