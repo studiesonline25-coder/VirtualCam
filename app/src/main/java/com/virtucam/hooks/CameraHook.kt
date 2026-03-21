@@ -40,6 +40,8 @@ object CameraHook {
     private val dummyTextures = mutableListOf<SurfaceTexture>()
     private var nextTextureId = 100
     private var configLoaded = false
+    // Maps original surfaces to their dummy replacements for CaptureRequest consistency
+    private val surfaceMap = mutableMapOf<Surface, Surface>()
 
     /**
      * Initialize all camera hooks
@@ -51,6 +53,7 @@ object CameraHook {
             
             hookCameraManager(lpparam)
             hookImageReader(lpparam)
+            hookCaptureRequest(lpparam)
             hookCameraDevice(lpparam)
             hookCameraDeviceOutputConfigurations(lpparam)
             hookCamera1(lpparam)
@@ -67,6 +70,32 @@ object CameraHook {
             override fun beforeHookedMethod(param: MethodHookParam) {
                 val cameraId = param.args[0] as? String
                 Log.d(TAG, "VirtuCam_Hook: App is opening Camera2 ID: $cameraId")
+            }
+        })
+    }
+
+    /**
+     * Hook CaptureRequest.Builder.addTarget() to swap original surfaces with dummy ones.
+     * Without this, setRepeatingRequest() crashes with "unconfigured Input/Output Surface"
+     */
+    private fun hookCaptureRequest(lpparam: XC_LoadPackage.LoadPackageParam) {
+        val builderClass = XposedHelpers.findClassIfExists(
+            "android.hardware.camera2.CaptureRequest\$Builder", lpparam.classLoader
+        ) ?: return
+
+        XposedBridge.hookAllMethods(builderClass, "addTarget", object : XC_MethodHook() {
+            override fun beforeHookedMethod(param: MethodHookParam) {
+                try {
+                    if (!isEnabled) return
+                    val originalSurface = param.args[0] as? Surface ?: return
+                    val dummySurface = surfaceMap[originalSurface]
+                    if (dummySurface != null) {
+                        Log.d(TAG, "VirtuCam_Hook: CaptureRequest.addTarget() → swapped to dummy surface")
+                        param.args[0] = dummySurface
+                    }
+                } catch (t: Throwable) {
+                    Log.e(TAG, "VirtuCam_Hook: Error in CaptureRequest.addTarget hook", t)
+                }
             }
         })
     }
@@ -90,8 +119,10 @@ object CameraHook {
 
                     if (param.args.size >= 3) {
                         val originalFormat = param.args[2] as Int
-                        // 0x23 = ImageFormat.YUV_420_888, 0x20 = ImageFormat.NV21
-                        if (originalFormat == 0x23 || originalFormat == 0x20 || originalFormat == 0x11) {
+                        // Override ALL camera formats to RGBA_8888, EXCEPT:
+                        // 0x1 = RGBA_8888 (already correct)
+                        // 0x100 = JPEG (used for photo capture, not preview)
+                        if (originalFormat != 0x1 && originalFormat != 0x100) {
                             Log.d(TAG, "VirtuCam_Hook: ImageReader format override: 0x${Integer.toHexString(originalFormat)} → RGBA_8888 (0x1)")
                             param.args[2] = 0x1 // PixelFormat.RGBA_8888
                         }
@@ -147,6 +178,10 @@ object CameraHook {
         // while the native camera pipeline is still writing to them
         dummyTextures.add(dummySurfaceTexture)
         dummySurfaces.add(surface)
+        // Track original→dummy mapping for CaptureRequest swapping
+        if (targetSurface != null) {
+            surfaceMap[targetSurface] = surface
+        }
         
         Log.d(TAG, "VirtuCam_Hook: Created dummy surface (texId=$texId, ${width}x${height})")
         return surface
@@ -411,6 +446,7 @@ object CameraHook {
         dummySurfaces.clear()
         dummyTextures.forEach { try { it.release() } catch (_: Throwable) {} }
         dummyTextures.clear()
+        surfaceMap.clear()
         
         val context = AndroidAppHelper.currentApplication() ?: return
         
