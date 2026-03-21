@@ -18,7 +18,9 @@ import java.nio.ByteBuffer
  */
 class FormatConverterBridge(
     val width: Int,
-    val height: Int
+    val height: Int,
+    val outputSurface: Surface? = null,
+    val outputFormat: Int = android.graphics.ImageFormat.YUV_420_888
 ) {
     companion object {
         private const val TAG = "VirtuCam_Bridge"
@@ -27,6 +29,10 @@ class FormatConverterBridge(
     private var imageReader: ImageReader? = null
     private var handlerThread: HandlerThread? = null
     private var handler: Handler? = null
+    private var imageWriter: android.media.ImageWriter? = null
+    
+    val hasImageWriter: Boolean
+        get() = imageWriter != null
 
     @Volatile
     private var cachedRgbaData: ByteArray? = null
@@ -40,6 +46,15 @@ class FormatConverterBridge(
             imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
             handlerThread = HandlerThread("VirtuCamRgbaCacheThread").apply { start() }
             handler = Handler(handlerThread!!.looper)
+            
+            if (outputSurface != null) {
+                try {
+                    imageWriter = android.media.ImageWriter.newInstance(outputSurface, 2)
+                    Log.d(TAG, "FormatConverterBridge: ImageWriter connected to output surface")
+                } catch (e: Throwable) {
+                    Log.e(TAG, "FormatConverterBridge: Failed to connect ImageWriter", e)
+                }
+            }
             
             imageReader?.setOnImageAvailableListener({ reader ->
                 val rgbaImage = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
@@ -58,10 +73,32 @@ class FormatConverterBridge(
                         buffer.position(0)
                         buffer.get(data)
                     }
-                } catch (e: Exception) {
+                    
+                    // PROACTIVE WRITER MODE: If ImageWriter is active, push the frame now
+                    if (imageWriter != null) {
+                        try {
+                            val outImage = imageWriter!!.dequeueInputImage()
+                            if (outImage != null) {
+                                if (outImage.format == 256 || outputFormat == 256) {
+                                    overwriteImageWithLatestJpeg(outImage)
+                                } else {
+                                    overwriteImageWithLatestYuv(outImage)
+                                }
+                                imageWriter!!.queueInputImage(outImage)
+                            }
+                        } catch (e: IllegalStateException) {
+                            // Expected backpressure behavior: No free buffers until app initiates CaptureRequest
+                        } catch (e: Throwable) {
+                            Log.e(TAG, "FormatConverterBridge: ImageWriter push failed", e)
+                        }
+                    }
+                    
+                } catch (e: Throwable) {
                     Log.e(TAG, "Cache loop error", e)
                 } finally {
-                    rgbaImage.close()
+                    try {
+                        rgbaImage.close()
+                    } catch (e: Throwable) {}
                 }
             }, handler)
             Log.d(TAG, "FormatConverterBridge (Cache Mode) started successfully.")
@@ -147,7 +184,6 @@ class FormatConverterBridge(
 
     /**
      * Overwrite a JPEG-format Image buffer with our spoofed content.
-     * Converts cached RGBA → Bitmap → JPEG bytes → writes into the Image's single plane.
      */
     fun overwriteImageWithLatestJpeg(targetImage: Image) {
         val rgbaBytes = cachedRgbaData ?: return
@@ -159,14 +195,27 @@ class FormatConverterBridge(
             val jpegBuffer = planes[0].buffer
             if (!jpegBuffer.hasRemaining()) return
             
+            val expectedSize = width * height * 4
+            if (rgbaBytes.size < expectedSize) {
+                Log.e(TAG, "FormatConverterBridge: rgbaBytes too small! expected $expectedSize, got ${rgbaBytes.size}")
+                return
+            }
+            
             // Create Bitmap from cached RGBA
-            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-            val rgbaBuffer = ByteBuffer.wrap(rgbaBytes)
-            bitmap.copyPixelsFromBuffer(rgbaBuffer)
+            var bitmap: Bitmap? = null
+            try {
+                bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                val rgbaBuffer = ByteBuffer.wrap(rgbaBytes)
+                bitmap.copyPixelsFromBuffer(rgbaBuffer)
+            } catch (t: Throwable) {
+                Log.e(TAG, "FormatConverterBridge: OOM creating $width x $height Bitmap for JPEG", t)
+                bitmap?.recycle()
+                return
+            }
             
             // Compress to JPEG
             val baos = ByteArrayOutputStream()
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 95, baos)
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 85, baos)
             bitmap.recycle()
             
             val jpegBytes = baos.toByteArray()
@@ -175,21 +224,27 @@ class FormatConverterBridge(
             jpegBuffer.clear()
             val bytesToWrite = jpegBytes.size.coerceAtMost(jpegBuffer.capacity())
             jpegBuffer.put(jpegBytes, 0, bytesToWrite)
-            jpegBuffer.flip()
+            
+            // Do NOT flip. We want the camera framework to read up to its native size.
+            // Appending our JPEG at the start of the buffer is enough; BitmapFactory stops at EOF.
+            jpegBuffer.position(0)
+            jpegBuffer.limit(jpegBuffer.capacity())
             
             Log.d(TAG, "FormatConverterBridge: Overwrote JPEG image (${jpegBytes.size} bytes)")
-        } catch (e: Exception) {
-            Log.e(TAG, "FormatConverterBridge: Failed to overwrite JPEG", e)
+        } catch (t: Throwable) {
+            Log.e(TAG, "FormatConverterBridge: Failed to overwrite JPEG", t)
         }
     }
 
     fun release() {
         try {
+            imageWriter?.close()
+            imageWriter = null
             imageReader?.close()
             handlerThread?.quitSafely()
             imageReader = null
-        } catch (e: Exception) {
-            Log.e(TAG, "Error during Bridge release", e)
+        } catch (t: Throwable) {
+            Log.e(TAG, "Error during Bridge release", t)
         }
     }
 }

@@ -197,19 +197,19 @@ object CameraHook {
                     when (format) {
                         ImageFormat.YUV_420_888, ImageFormat.YV12, 35 -> {
                             // YUV Data Override path
-                            if (bridge != null) {
+                            if (bridge != null && !bridge.hasImageWriter) {
                                 bridge.overwriteImageWithLatestYuv(image)
                                 Log.d(TAG, "VirtuCam_Hook: Overwrote YUV image ${image.width}x${image.height}")
                             }
                         }
                         256 -> { // JPEG = 0x100 = 256
                             // JPEG Capture Override path
-                            if (bridge != null) {
+                            if (bridge != null && !bridge.hasImageWriter) {
                                 bridge.overwriteImageWithLatestJpeg(image)
                                 Log.d(TAG, "VirtuCam_Hook: Overwrote JPEG capture ${image.width}x${image.height}")
-                            } else {
-                                // No matching bridge - try any bridge
-                                val anyBridge = activeBridges.firstOrNull()
+                            } else if (bridge == null) {
+                                // No matching bridge - try any bridge without writer
+                                val anyBridge = activeBridges.firstOrNull { !it.hasImageWriter }
                                 if (anyBridge != null) {
                                     anyBridge.overwriteImageWithLatestJpeg(image)
                                     Log.d(TAG, "VirtuCam_Hook: Overwrote JPEG capture (fallback bridge) ${image.width}x${image.height}")
@@ -218,7 +218,7 @@ object CameraHook {
                         }
                         else -> {
                             // Unknown format - try YUV overwrite as a best-effort
-                            if (bridge != null && image.planes.size >= 3) {
+                            if (bridge != null && !bridge.hasImageWriter && image.planes.size >= 3) {
                                 bridge.overwriteImageWithLatestYuv(image)
                             }
                         }
@@ -385,37 +385,34 @@ object CameraHook {
         val format = SurfaceUtils.getSurfaceFormat(targetSurface)
         val isPreview = (format == 0x22 || format == 0x1)
         
-        if (isPreview) {
-            val dummySurface = createDummySurface(targetSurface, w, h)
-            surfaceMap[targetSurface] = dummySurface
+        val dummySurface = createDummySurface(targetSurface, w, h)
+        surfaceMap[targetSurface] = dummySurface
+        
+        try {
             try {
-                try {
-                    val enableSharingMethod = config.javaClass.getMethod("enableSurfaceSharing")
-                    enableSharingMethod.invoke(config)
-                } catch (e: Throwable) {}
-
-                val mSurfacesField = XposedHelpers.findField(config.javaClass, "mSurfaces")
-                val surfaces = mSurfacesField.get(config) as? java.util.ArrayList<Surface>
-                if (surfaces != null) {
-                    surfaces.clear()
-                    surfaces.add(dummySurface)
-                    return targetSurface
-                }
+                val enableSharingMethod = config.javaClass.getMethod("enableSurfaceSharing")
+                enableSharingMethod.invoke(config)
             } catch (e: Throwable) {}
-            
-            try {
+
+            val mSurfacesField = XposedHelpers.findField(config.javaClass, "mSurfaces")
+            val surfaces = mSurfacesField.get(config) as? java.util.ArrayList<Surface>
+            if (surfaces != null) {
+                surfaces.clear()
+                surfaces.add(dummySurface)
+            } else {
                 val mSurfaceField = XposedHelpers.findField(config.javaClass, "mSurface")
                 mSurfaceField.set(config, dummySurface)
-            } catch (e: Throwable) {
-                Log.e(TAG, "VirtuCam_Hook: Failed to swap surface in config", e)
             }
+        } catch (e: Throwable) {
+            Log.e(TAG, "VirtuCam_Hook: Failed to swap surface in config", e)
+        }
+        
+        if (isPreview) {
             return targetSurface
         } else {
-            // YUV Data-Overwrite Mode: HAL processes actual data into true targetSurface to preserve usage flags!
-            // We DO NOT swap the surface in the HAL config!
-            val bridge = FormatConverterBridge(w, h)
+            // NEW Native Producer Mode: We don't overwrite! We connect an ImageWriter to targetSurface!
+            val bridge = FormatConverterBridge(w, h, targetSurface, format)
             activeBridges.add(bridge)
-            // But we tell VirtualRenderThread to stream its RGBA rendering strictly into our high-speed cache.
             return bridge.inputSurface ?: targetSurface
         }
     }
@@ -486,18 +483,17 @@ object CameraHook {
                                 val format = SurfaceUtils.getSurfaceFormat(targetSurface)
                                 val isPreview = (format == 0x22 || format == 0x1)
                                 
+                                val dummySurface = createDummySurface(targetSurface, 1280, 720)
+                                surfaceMap[targetSurface] = dummySurface
+                                newSurfaces.add(dummySurface)
+                                
                                 if (isPreview) {
-                                    val dummySurface = createDummySurface(targetSurface, 1280, 720)
-                                    surfaceMap[targetSurface] = dummySurface
                                     targetSurfaces.add(targetSurface)
-                                    newSurfaces.add(dummySurface)
                                 } else {
-                                    val bridge = FormatConverterBridge(1280, 720)
+                                    // NEW Native Producer Mode:
+                                    val bridge = FormatConverterBridge(1280, 720, targetSurface, format)
                                     activeBridges.add(bridge)
                                     targetSurfaces.add(bridge.inputSurface ?: targetSurface)
-                                    
-                                    // YUV Override Mode: Give targetSurface to the Real Camera so it receives perfect hardware buffers!
-                                    newSurfaces.add(targetSurface)
                                 }
                             }
                             
