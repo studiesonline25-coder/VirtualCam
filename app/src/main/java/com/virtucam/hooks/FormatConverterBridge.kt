@@ -1,10 +1,8 @@
 package com.virtucam.hooks
 
-import android.graphics.ImageFormat
 import android.graphics.PixelFormat
 import android.media.Image
 import android.media.ImageReader
-import android.media.ImageWriter
 import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
@@ -12,22 +10,24 @@ import android.view.Surface
 import java.nio.ByteBuffer
 
 /**
- * Bridges RGBA_8888 output from VirtualRenderThread into whatever YUV format the app's ImageReader expects.
- * This prevents the "UnsupportedOperationException: buffer format 0x1 doesn't match 0x32315659" crash natively.
+ * Caches RGBA_8888 output from VirtualRenderThread and elegantly overwrites real, physically-allocated
+ * ImageReader YUV buffers via Data Overwriting. This prevents VirtualApp IPC drops ("GraphicBuffer is null")
+ * and cleanly bypasses hardware usage flag validation errors.
  */
 class FormatConverterBridge(
-    private val targetSurface: Surface,
-    private val width: Int,
-    private val height: Int
+    val width: Int,
+    val height: Int
 ) {
     companion object {
         private const val TAG = "VirtuCam_Bridge"
     }
 
     private var imageReader: ImageReader? = null
-    private var imageWriter: ImageWriter? = null
     private var handlerThread: HandlerThread? = null
     private var handler: Handler? = null
+
+    @Volatile
+    private var cachedRgbaData: ByteArray? = null
 
     // This is the surface we hand to the VirtualRenderThread (it receives RGBA from OpenGL)
     val inputSurface: Surface?
@@ -35,67 +35,49 @@ class FormatConverterBridge(
 
     init {
         try {
-            // Instantiate ImageWriter wrapping the app's original surface. Max images = 2 (standard double-buffering)
-            imageWriter = ImageWriter.newInstance(targetSurface, 2)
-            val format = imageWriter?.format ?: ImageFormat.UNKNOWN
-            Log.d(TAG, "Initialized ImageWriter with format: 0x${Integer.toHexString(format)} for size ${width}x${height}")
+            imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
+            handlerThread = HandlerThread("VirtuCamRgbaCacheThread").apply { start() }
+            handler = Handler(handlerThread!!.looper)
             
-            // Optimization: If the target format is PRIVATE (0x22) or RGBA_8888 (0x1), 
-            // OpenGL can render to it natively without format crashing. We abort the CPU bridge.
-            if (format == 0x22 || format == 0x1) {
-                Log.d(TAG, "Format 0x${Integer.toHexString(format)} natively supports EGL. Bypassing CPU bridge.")
-                release()
-            } else {
-                // If the app expects something strict like YUV_420_888,
-                // we configure our receiver ImageReader to RGBA_8888 since that's what OpenGL natively produces.
-                imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
-                
-                handlerThread = HandlerThread("VirtuCamConversionThread").apply { start() }
-                handler = Handler(handlerThread!!.looper)
-                
-                imageReader?.setOnImageAvailableListener({ reader ->
-                    val rgbaImage = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
-                    try {
-                        // Pull a blank, natively formatted buffer from the app's target surface queue
-                        val yuvImage = imageWriter?.dequeueInputImage()
-                        if (yuvImage != null) {
-                            convertRgbaToYuvFast(rgbaImage, yuvImage)
-                            // Feed the correctly formatted buffer back into the app's queue
-                            imageWriter?.queueInputImage(yuvImage)
+            imageReader?.setOnImageAvailableListener({ reader ->
+                val rgbaImage = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
+                try {
+                    val planes = rgbaImage.planes
+                    if (planes.isNotEmpty()) {
+                        val buffer = planes[0].buffer
+                        val remaining = buffer.remaining()
+                        
+                        var data = cachedRgbaData
+                        if (data == null || data.size != remaining) {
+                            data = ByteArray(remaining)
+                            cachedRgbaData = data
                         }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Bridge loop error", e)
-                        if (e is IllegalStateException) {
-                            Log.e(TAG, "Target surface abandoned. Releasing bridge.")
-                            release()
-                        }
-                        // If queueing fails, we have to abort the image
-                    } finally {
-                        rgbaImage.close()
+                        
+                        buffer.position(0)
+                        buffer.get(data)
                     }
-                }, handler)
-                Log.d(TAG, "FormatConverterBridge started successfully. Buffer bridge active.")
-            }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Cache loop error", e)
+                } finally {
+                    rgbaImage.close()
+                }
+            }, handler)
+            Log.d(TAG, "FormatConverterBridge (Cache Mode) started successfully.")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to initialize FormatConverterBridge", e)
             release()
         }
     }
 
-    // Reuse bulk allocation to prevent garbage collection stuttering
-    private var cachedRgbaBytes: ByteArray? = null
-    private var cachedYBytes: ByteArray? = null
+    // Reuse bulk allocation to prevent garbage collection stuttering during synchronously blocking overwrite
+    private var yRowBytes: ByteArray? = null
 
     /**
-     * Converts RGBA pixels to the planes of the target image.
-     * Handles standard YUV_420_888 and YV12 formats manually in an optimized loop.
+     * Synchronously overwrites the physically-allocated target buffer with our cached YUV computations.
+     * This avoids ImageWriter usage flags rejections natively.
      */
-    private fun convertRgbaToYuvFast(rgbaImage: Image, targetImage: Image) {
-        val rgbaPlanes = rgbaImage.planes
-        val rgbaBuffer = rgbaPlanes[0].buffer
-        
-        val rgbaRemaining = rgbaBuffer.remaining()
-        if (rgbaRemaining < (width * height * 2)) return
+    fun overwriteImageWithLatestYuv(targetImage: Image) {
+        val rgbaBytes = cachedRgbaData ?: return
         
         val targetPlanes = targetImage.planes
         if (targetPlanes.size < 3) return
@@ -109,43 +91,34 @@ class FormatConverterBridge(
         val vRowStride = targetPlanes[2].rowStride
         val uvPixelStride = targetPlanes[1].pixelStride
         
-        val rgbaRowStride = rgbaPlanes[0].rowStride
-        val rgbaPixelStride = rgbaPlanes[0].pixelStride
+        val rgbaRowStride = width * 4 // RGBA_8888 tightly packed from our ImageReader cache
         
-        // Ensure arrays are allocated cleanly
-        if (cachedRgbaBytes == null || cachedRgbaBytes!!.size < rgbaRemaining) {
-            cachedRgbaBytes = ByteArray(rgbaRemaining)
+        if (yRowBytes == null || yRowBytes!!.size < yRowStride) {
+            yRowBytes = ByteArray(yRowStride)
         }
-        val rgbaBytes = cachedRgbaBytes!!
+        val yRow = yRowBytes!!
         
-        val yDataSize = (height - 1) * yRowStride + width
-        if (cachedYBytes == null || cachedYBytes!!.size < yDataSize) {
-            cachedYBytes = ByteArray(yDataSize)
-        }
-        val yBytes = cachedYBytes!!
-        
-        rgbaBuffer.position(0)
-        rgbaBuffer.get(rgbaBytes, 0, rgbaRemaining)
+        yBuffer.position(0)
         
         for (row in 0 until height) {
-            var rgbaOffset = row * rgbaRowStride
-            var yIndex = row * yRowStride
+            // OpenGL source image is bottom-to-top, but YUV buffers are top-to-bottom.
+            // We invert the row index here to fix the vertical flip.
+            var rgbaOffset = (height - 1 - row) * rgbaRowStride
+            if (rgbaOffset < 0 || rgbaOffset + width * 4 > rgbaBytes.size) break
             
             val isEvenRow = (row % 2 == 0)
             var uIndex = (row / 2) * uRowStride
             var vIndex = (row / 2) * vRowStride
             
+            var yIndex = 0
             for (col in 0 until width) {
-                if (rgbaOffset + 2 >= rgbaRemaining) break
-                
-                // Extract RGB values from array (vastly faster than JNI buffer get())
                 val r = rgbaBytes[rgbaOffset].toInt() and 0xFF
                 val g = rgbaBytes[rgbaOffset + 1].toInt() and 0xFF
                 val b = rgbaBytes[rgbaOffset + 2].toInt() and 0xFF
                 
                 // integer math approximation (shifts and adds)
                 val y = ((66 * r + 129 * g + 25 * b + 128) shr 8) + 16
-                yBytes[yIndex++] = y.coerceIn(16, 235).toByte()
+                yRow[yIndex++] = y.coerceIn(16, 235).toByte()
                 
                 if (isEvenRow && (col % 2 == 0)) {
                     val u = ((-38 * r - 74 * g + 112 * b + 128) shr 8) + 128
@@ -158,23 +131,23 @@ class FormatConverterBridge(
                     vIndex += uvPixelStride
                 }
                 
-                rgbaOffset += rgbaPixelStride
+                rgbaOffset += 4
+            }
+            
+            // Fast bulk copy of the heavy Y-plane row by row
+            val pos = row * yRowStride
+            if (pos < yBuffer.capacity()) {
+                yBuffer.position(pos)
+                yBuffer.put(yRow, 0, yIndex.coerceAtMost(yBuffer.remaining()))
             }
         }
-        
-        // Fast bulk copy of the heavy Y-plane
-        yBuffer.position(0)
-        yBuffer.put(yBytes, 0, yDataSize.coerceAtMost(yBuffer.remaining()))
     }
 
-    
     fun release() {
         try {
             imageReader?.close()
-            imageWriter?.close()
             handlerThread?.quitSafely()
             imageReader = null
-            imageWriter = null
         } catch (e: Exception) {
             Log.e(TAG, "Error during Bridge release", e)
         }
