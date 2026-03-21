@@ -35,6 +35,10 @@ object CameraHook {
     private var targetPackage: String = ""
     
     private val renderThreads = mutableListOf<Any>()
+    // Strong references to prevent GC from destroying surfaces while native camera pipeline uses them
+    private val dummySurfaces = mutableListOf<Surface>()
+    private val dummyTextures = mutableListOf<SurfaceTexture>()
+    private var nextTextureId = 100
     private var configLoaded = false
 
     /**
@@ -133,22 +137,22 @@ object CameraHook {
     }
 
     private fun createDummySurface(targetSurface: Surface?): Surface {
-        val dummySurfaceTexture = SurfaceTexture(10)
+        val texId = nextTextureId++
+        val dummySurfaceTexture = SurfaceTexture(texId)
         
-        // NotebookLM Research: Match the original surface's configured size to bypass SurfaceUtils checks
         var width = 1920
         var height = 1080
         
-        try {
-            if (targetSurface != null) {
-                // Try to reflectively get mConfiguredSize from the original surface or its producer
-                // On most Android versions, we can't easily get it from Surface directly.
-                // But we can assume standard 1080p if it fails.
-            }
-        } catch (e: Throwable) {}
-        
         dummySurfaceTexture.setDefaultBufferSize(width, height)
-        return Surface(dummySurfaceTexture)
+        val surface = Surface(dummySurfaceTexture)
+        
+        // Retain strong references — prevents GC from destroying surfaces
+        // while the native camera pipeline is still writing to them
+        dummyTextures.add(dummySurfaceTexture)
+        dummySurfaces.add(surface)
+        
+        Log.d(TAG, "VirtuCam_Hook: Created dummy surface (texId=$texId, ${width}x${height})")
+        return surface
     }
 
     @Suppress("UNCHECKED_CAST")
@@ -355,11 +359,16 @@ object CameraHook {
     private fun startRenderThreads(targetSurfaces: List<Surface>) {
         renderThreads.forEach { 
             try {
-                // Reflectively call quit() to avoid explicit type checks during load
                 it.javaClass.getMethod("quit").invoke(it)
             } catch (e: Exception) {}
         }
         renderThreads.clear()
+        
+        // Release old dummy surfaces safely now that render threads are stopped
+        dummySurfaces.forEach { try { it.release() } catch (_: Throwable) {} }
+        dummySurfaces.clear()
+        dummyTextures.forEach { try { it.release() } catch (_: Throwable) {} }
+        dummyTextures.clear()
         
         val context = AndroidAppHelper.currentApplication() ?: return
         
