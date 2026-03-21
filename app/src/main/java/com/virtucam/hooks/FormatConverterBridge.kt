@@ -66,6 +66,10 @@ class FormatConverterBridge(
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "Bridge loop error", e)
+                        if (e is IllegalStateException) {
+                            Log.e(TAG, "Target surface abandoned. Releasing bridge.")
+                            release()
+                        }
                         // If queueing fails, we have to abort the image
                     } finally {
                         rgbaImage.close()

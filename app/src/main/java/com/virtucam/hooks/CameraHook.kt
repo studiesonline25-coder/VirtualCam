@@ -581,11 +581,15 @@ class VirtualRenderThread(
                 mediaSurface = Surface(mediaSurfaceTexture)
                 
                 streamPlayer = StreamPlayer(context, streamUrl, mediaSurface!!) {
+                    if (!isRunning) return@StreamPlayer
                     mediaSurfaceTexture?.updateTexImage()
                     val matrix = FloatArray(16)
                     mediaSurfaceTexture?.getTransformMatrix(matrix)
                     textureRenderer?.draw(matrix, 90) // Simplified Portrait Orientation
-                    eglCore?.swapBuffers(eglSurface!!)
+                    if (eglCore?.swapBuffers(eglSurface!!) == false) {
+                        Log.w("VirtuCam_Render", "Target surface abandoned during stream. Stopping thread.")
+                        quit()
+                    }
                 }
                 streamPlayer!!.start()
                 
@@ -603,11 +607,15 @@ class VirtualRenderThread(
                 if (pfd != null) {
                     val fd = pfd.fileDescriptor
                     videoPlayer = VideoPlayer(fd, mediaSurface!!) {
+                        if (!isRunning) return@VideoPlayer
                         mediaSurfaceTexture?.updateTexImage()
                         val matrix = FloatArray(16)
                         mediaSurfaceTexture?.getTransformMatrix(matrix)
                         textureRenderer?.draw(matrix, 90)
-                        eglCore?.swapBuffers(eglSurface!!)
+                        if (eglCore?.swapBuffers(eglSurface!!) == false) {
+                            Log.w("VirtuCam_Render", "Target surface abandoned during video. Stopping thread.")
+                            quit()
+                        }
                     }
                     videoPlayer!!.start()
                     
@@ -634,7 +642,10 @@ class VirtualRenderThread(
                     
                     while (isRunning) {
                         textureRenderer?.draw(matrix, 90)
-                        eglCore?.swapBuffers(eglSurface!!)
+                        if (eglCore?.swapBuffers(eglSurface!!) == false) {
+                            Log.w("VirtuCam_Render", "Target surface abandoned. Stopping Static Image thread.")
+                            quit()
+                        }
                         sleep(33) // ~30 fps simulated heartbeat
                     }
                 }
