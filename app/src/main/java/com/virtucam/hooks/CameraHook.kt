@@ -54,6 +54,7 @@ object CameraHook {
             hookCameraManager(lpparam)
             hookImageReader(lpparam)
             hookCaptureRequest(lpparam)
+            hookCameraError(lpparam)
             hookCameraDevice(lpparam)
             hookCameraDeviceOutputConfigurations(lpparam)
             hookCamera1(lpparam)
@@ -62,6 +63,35 @@ object CameraHook {
         } catch (t: Throwable) {
             Log.e(TAG, "VirtuCam_Hook: CRITICAL failure in $targetPackage", t)
         }
+    }
+
+    /**
+     * Suppress CameraDevice.StateCallback.onError to prevent "Can't connect to camera" errors.
+     * When the camera HAL encounters issues with our dummy surfaces, it fires onError(),
+     * which causes the app to show an error dialog or crash. We suppress this entirely.
+     */
+    private fun hookCameraError(lpparam: XC_LoadPackage.LoadPackageParam) {
+        val stateCallbackClass = XposedHelpers.findClassIfExists(
+            "android.hardware.camera2.CameraDevice\$StateCallback", lpparam.classLoader
+        ) ?: return
+
+        XposedBridge.hookAllMethods(stateCallbackClass, "onError", object : XC_MethodHook() {
+            override fun beforeHookedMethod(param: MethodHookParam) {
+                if (!isEnabled) return
+                val errorCode = if (param.args.size >= 2) param.args[1] as? Int else null
+                Log.d(TAG, "VirtuCam_Hook: Suppressed CameraDevice.onError (code=$errorCode)")
+                param.result = null // Prevent the callback from executing
+            }
+        })
+
+        // Also suppress onDisconnected to prevent the app from closing when the HAL disconnects
+        XposedBridge.hookAllMethods(stateCallbackClass, "onDisconnected", object : XC_MethodHook() {
+            override fun beforeHookedMethod(param: MethodHookParam) {
+                if (!isEnabled) return
+                Log.d(TAG, "VirtuCam_Hook: Suppressed CameraDevice.onDisconnected")
+                param.result = null
+            }
+        })
     }
 
     private fun hookCameraManager(lpparam: XC_LoadPackage.LoadPackageParam) {
@@ -101,34 +131,45 @@ object CameraHook {
     }
 
     /**
-     * Hook ImageReader.newInstance() to force RGBA_8888 format.
-     * Real cameras produce YUV_420_888 (0x23=35), but our OpenGL pipeline outputs RGBA_8888 (0x1=1).
-     * Without this hook, ImageReader.acquireNextImage() crashes with UnsupportedOperationException.
+     * Hook ImageReader to suppress format mismatch errors.
+     * Instead of changing the format at creation (which breaks the camera HAL's internal readers),
+     * we catch the UnsupportedOperationException in acquireNextImage/acquireLatestImage.
+     * This lets the camera HAL work normally while silently ignoring format mismatches.
      */
     private fun hookImageReader(lpparam: XC_LoadPackage.LoadPackageParam) {
         val imageReaderClass = XposedHelpers.findClassIfExists(
             "android.media.ImageReader", lpparam.classLoader
         ) ?: return
 
-        // Hook the static factory: ImageReader.newInstance(width, height, format, maxImages)
-        XposedBridge.hookAllMethods(imageReaderClass, "newInstance", object : XC_MethodHook() {
-            override fun beforeHookedMethod(param: MethodHookParam) {
-                try {
-                    loadConfiguration()
-                    if (!isEnabled) return
+        // Suppress format mismatch in acquireNextImage
+        XposedBridge.hookAllMethods(imageReaderClass, "acquireNextImage", object : XC_MethodHook() {
+            override fun afterHookedMethod(param: MethodHookParam) {
+                if (param.throwable is UnsupportedOperationException) {
+                    Log.d(TAG, "VirtuCam_Hook: Suppressed ImageReader format mismatch in acquireNextImage")
+                    param.throwable = null
+                    param.result = null
+                }
+            }
+        })
 
-                    if (param.args.size >= 3) {
-                        val originalFormat = param.args[2] as Int
-                        // Override ALL camera formats to RGBA_8888, EXCEPT:
-                        // 0x1 = RGBA_8888 (already correct)
-                        // 0x100 = JPEG (used for photo capture, not preview)
-                        if (originalFormat != 0x1 && originalFormat != 0x100) {
-                            Log.d(TAG, "VirtuCam_Hook: ImageReader format override: 0x${Integer.toHexString(originalFormat)} → RGBA_8888 (0x1)")
-                            param.args[2] = 0x1 // PixelFormat.RGBA_8888
-                        }
-                    }
-                } catch (t: Throwable) {
-                    Log.e(TAG, "VirtuCam_Hook: Error in ImageReader hook", t)
+        // Suppress format mismatch in acquireLatestImage
+        XposedBridge.hookAllMethods(imageReaderClass, "acquireLatestImage", object : XC_MethodHook() {
+            override fun afterHookedMethod(param: MethodHookParam) {
+                if (param.throwable is UnsupportedOperationException) {
+                    Log.d(TAG, "VirtuCam_Hook: Suppressed ImageReader format mismatch in acquireLatestImage")
+                    param.throwable = null
+                    param.result = null
+                }
+            }
+        })
+
+        // Also suppress in acquireNextSurfaceImage (internal method that throws the actual error)
+        XposedBridge.hookAllMethods(imageReaderClass, "acquireNextSurfaceImage", object : XC_MethodHook() {
+            override fun afterHookedMethod(param: MethodHookParam) {
+                if (param.throwable is UnsupportedOperationException) {
+                    Log.d(TAG, "VirtuCam_Hook: Suppressed ImageReader format mismatch in acquireNextSurfaceImage")
+                    param.throwable = null
+                    param.result = null
                 }
             }
         })
