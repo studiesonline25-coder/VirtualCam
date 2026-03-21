@@ -43,11 +43,7 @@ class StreamPlayer(
         handler = Handler(handlerThread!!.looper)
         
         handler?.post {
-            try {
-                initializePlayer()
-            } catch (e: Throwable) {
-                Log.e(TAG, "Failed to initialize StreamPlayer", e)
-            }
+            initializePlayer()
         }
     }
 
@@ -117,8 +113,6 @@ class StreamPlayer(
                 exoPlayer?.stop()
                 exoPlayer?.release()
                 exoPlayer = null
-            } catch (e: Throwable) {
-                Log.e(TAG, "Error releasing StreamPlayer", e)
             } finally {
                 handlerThread?.quitSafely()
                 handlerThread = null

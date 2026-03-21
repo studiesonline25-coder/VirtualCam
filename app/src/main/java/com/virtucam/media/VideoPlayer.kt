@@ -41,8 +41,6 @@ class VideoPlayer(
         playThread = Thread {
             try {
                 decodeLoop()
-            } catch (e: Exception) {
-                Log.e(TAG, "Playback failed", e)
             } finally {
                 release()
             }

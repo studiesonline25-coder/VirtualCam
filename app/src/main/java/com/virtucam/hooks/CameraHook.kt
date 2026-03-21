@@ -72,7 +72,6 @@ object CameraHook {
             hookCameraDevice(lpparam)
             hookCameraDeviceOutputConfigurations(lpparam)
             hookCamera1(lpparam)
-            hookGlobalThreadGuard(lpparam)
             
             Log.d(TAG, "VirtuCam_Hook: All hooks deployed successfully.")
         } catch (t: Throwable) {
@@ -231,35 +230,6 @@ object CameraHook {
 
         XposedBridge.hookAllMethods(imageReaderClass, "acquireNextImage", overwriteHook)
         XposedBridge.hookAllMethods(imageReaderClass, "acquireLatestImage", overwriteHook)
-
-        // [ONCE AND FOR ALL] Robust Listener Protection
-        // We hook setOnImageAvailableListener to find the specific class of the listener.
-        // Then we defensively hook the 'onImageAvailable' method of that class to catch NPEs.
-        XposedBridge.hookAllMethods(imageReaderClass, "setOnImageAvailableListener", object : XC_MethodHook() {
-            override fun beforeHookedMethod(param: MethodHookParam) {
-                val listener = param.args[0] ?: return
-                val clazz = listener.javaClass
-                
-                synchronized(hookedListenerClasses) {
-                    if (hookedListenerClasses.contains(clazz)) return
-                    hookedListenerClasses.add(clazz)
-                }
-                
-                Log.d(TAG, "VirtuCam_Hook: Defensively wrapping NPE in listener class: ${clazz.name}")
-                try {
-                    XposedBridge.hookAllMethods(clazz, "onImageAvailable", object : XC_MethodHook() {
-                        override fun afterHookedMethod(innerParam: MethodHookParam) {
-                            if (innerParam.throwable is NullPointerException) {
-                                Log.e(TAG, "VirtuCam_Hook: CRASH PREVENTED - Caught NPE in ${clazz.name}.onImageAvailable. Details: ${innerParam.throwable?.message}")
-                                innerParam.throwable = null
-                            }
-                        }
-                    })
-                } catch (e: Throwable) {
-                    Log.e(TAG, "VirtuCam_Hook: Failed to hook listener class ${clazz.name}", e)
-                }
-            }
-        })
     }
 
     private fun hookCamera1(lpparam: XC_LoadPackage.LoadPackageParam) {
@@ -296,7 +266,12 @@ object CameraHook {
         })
     }
 
-    private fun createDummySurface(targetSurface: Surface?, width: Int = 1280, height: Int = 720): Surface {
+    private fun createDummySurface(
+        targetSurface: Surface?, 
+        width: Int = 1280, 
+        height: Int = 720,
+        bridge: FormatConverterBridge? = null
+    ): Surface {
         // [ONCE AND FOR ALL] Prevent BufferQueue Stalls (pipelineFull Native Crashes)
         // Instead of a bare SurfaceTexture that no one reads, we use an ImageReader sink.
         // It actively consumes and discards frames so the HAL never blocks.
@@ -314,6 +289,8 @@ object CameraHook {
             try {
                 // Instantly consume and discard the image to keep the pipeline flowing
                 ir.acquireNextImage()?.close()
+                // Sync Trigger: The real camera just took a photo! Push our spoofed frame to the app NOW!
+                bridge?.pushLatestFrameToWriter()
             } catch (e: Exception) {
                 // Ignore errors during discard
             }
@@ -385,7 +362,15 @@ object CameraHook {
         val format = SurfaceUtils.getSurfaceFormat(targetSurface)
         val isPreview = (format == 0x22 || format == 0x1)
         
-        val dummySurface = createDummySurface(targetSurface, w, h)
+        val bridge = if (!isPreview) {
+            val b = FormatConverterBridge(w, h, targetSurface, format)
+            activeBridges.add(b)
+            b
+        } else {
+            null
+        }
+        
+        val dummySurface = createDummySurface(targetSurface, w, h, bridge)
         surfaceMap[targetSurface] = dummySurface
         
         try {
@@ -407,14 +392,7 @@ object CameraHook {
             Log.e(TAG, "VirtuCam_Hook: Failed to swap surface in config", e)
         }
         
-        if (isPreview) {
-            return targetSurface
-        } else {
-            // NEW Native Producer Mode: We don't overwrite! We connect an ImageWriter to targetSurface!
-            val bridge = FormatConverterBridge(w, h, targetSurface, format)
-            activeBridges.add(bridge)
-            return bridge.inputSurface ?: targetSurface
-        }
+        return bridge?.inputSurface ?: targetSurface
     }
 
     /**
@@ -483,18 +461,19 @@ object CameraHook {
                                 val format = SurfaceUtils.getSurfaceFormat(targetSurface)
                                 val isPreview = (format == 0x22 || format == 0x1)
                                 
-                                val dummySurface = createDummySurface(targetSurface, 1280, 720)
+                                val bridge = if (!isPreview) {
+                                    val b = FormatConverterBridge(1280, 720, targetSurface, format)
+                                    activeBridges.add(b)
+                                    targetSurfaces.add(b.inputSurface ?: targetSurface)
+                                    b
+                                } else {
+                                    targetSurfaces.add(targetSurface)
+                                    null
+                                }
+                                
+                                val dummySurface = createDummySurface(targetSurface, 1280, 720, bridge)
                                 surfaceMap[targetSurface] = dummySurface
                                 newSurfaces.add(dummySurface)
-                                
-                                if (isPreview) {
-                                    targetSurfaces.add(targetSurface)
-                                } else {
-                                    // NEW Native Producer Mode:
-                                    val bridge = FormatConverterBridge(1280, 720, targetSurface, format)
-                                    activeBridges.add(bridge)
-                                    targetSurfaces.add(bridge.inputSurface ?: targetSurface)
-                                }
                             }
                             
                             param.args[0] = newSurfaces
@@ -650,32 +629,6 @@ object CameraHook {
         }
     }
     
-    /**
-     * Global crash guard: Catches ANY uncaught exception on all HandlerThreads.
-     * This is the last line of defense — if all other hooks fail, this prevents the app from crashing.
-     */
-    private fun hookGlobalThreadGuard(lpparam: XC_LoadPackage.LoadPackageParam) {
-        try {
-            val handlerThreadClass = XposedHelpers.findClassIfExists(
-                "android.os.HandlerThread", lpparam.classLoader
-            ) ?: return
-            
-            XposedBridge.hookAllMethods(handlerThreadClass, "run", object : XC_MethodHook() {
-                override fun afterHookedMethod(param: MethodHookParam) {
-                    if (param.throwable != null && isEnabled) {
-                        val threadName = (param.thisObject as? Thread)?.name ?: "unknown"
-                        Log.e(TAG, "VirtuCam_Guard: CRASH PREVENTED on thread '$threadName': ${param.throwable?.javaClass?.name}: ${param.throwable?.message}")
-                        param.throwable = null
-                    }
-                }
-            })
-            
-            Log.d(TAG, "VirtuCam_Hook: Global HandlerThread crash guard installed.")
-        } catch (t: Throwable) {
-            Log.e(TAG, "VirtuCam_Hook: Failed to install global crash guard", t)
-        }
-    }
-
     /**
      * Anti-Plugin mechanism: Removes our hooking frames from thread stack trace
      */

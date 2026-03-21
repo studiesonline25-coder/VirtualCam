@@ -73,26 +73,6 @@ class FormatConverterBridge(
                         buffer.position(0)
                         buffer.get(data)
                     }
-                    
-                    // PROACTIVE WRITER MODE: If ImageWriter is active, push the frame now
-                    if (imageWriter != null) {
-                        try {
-                            val outImage = imageWriter!!.dequeueInputImage()
-                            if (outImage != null) {
-                                if (outImage.format == 256 || outputFormat == 256) {
-                                    overwriteImageWithLatestJpeg(outImage)
-                                } else {
-                                    overwriteImageWithLatestYuv(outImage)
-                                }
-                                imageWriter!!.queueInputImage(outImage)
-                            }
-                        } catch (e: IllegalStateException) {
-                            // Expected backpressure behavior: No free buffers until app initiates CaptureRequest
-                        } catch (e: Throwable) {
-                            Log.e(TAG, "FormatConverterBridge: ImageWriter push failed", e)
-                        }
-                    }
-                    
                 } catch (e: Throwable) {
                     Log.e(TAG, "Cache loop error", e)
                 } finally {
@@ -197,21 +177,13 @@ class FormatConverterBridge(
             
             val expectedSize = width * height * 4
             if (rgbaBytes.size < expectedSize) {
-                Log.e(TAG, "FormatConverterBridge: rgbaBytes too small! expected $expectedSize, got ${rgbaBytes.size}")
-                return
+                throw IllegalStateException("FormatConverterBridge: rgbaBytes too small! expected $expectedSize, got ${rgbaBytes.size}")
             }
             
             // Create Bitmap from cached RGBA
-            var bitmap: Bitmap? = null
-            try {
-                bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-                val rgbaBuffer = ByteBuffer.wrap(rgbaBytes)
-                bitmap.copyPixelsFromBuffer(rgbaBuffer)
-            } catch (t: Throwable) {
-                Log.e(TAG, "FormatConverterBridge: OOM creating $width x $height Bitmap for JPEG", t)
-                bitmap?.recycle()
-                return
-            }
+            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            val rgbaBuffer = ByteBuffer.wrap(rgbaBytes)
+            bitmap.copyPixelsFromBuffer(rgbaBuffer)
             
             // Compress to JPEG
             val baos = ByteArrayOutputStream()
@@ -231,8 +203,33 @@ class FormatConverterBridge(
             jpegBuffer.limit(jpegBuffer.capacity())
             
             Log.d(TAG, "FormatConverterBridge: Overwrote JPEG image (${jpegBytes.size} bytes)")
-        } catch (t: Throwable) {
-            Log.e(TAG, "FormatConverterBridge: Failed to overwrite JPEG", t)
+    }
+
+    /**
+     * Manually push the latest cached RGBA frame into the native ImageWriter.
+     * Call this ONLY when the real camera signals a capture event to prevent native BufferQueue starvation and SIGSEGV block crashing.
+     */
+    fun pushLatestFrameToWriter() {
+        if (imageWriter == null) return
+        Thread {
+            try {
+                val outImage = imageWriter!!.dequeueInputImage()
+                if (outImage != null) {
+                    if (outImage.format == 256 || outputFormat == 256) {
+                        overwriteImageWithLatestJpeg(outImage)
+                    } else {
+                        overwriteImageWithLatestYuv(outImage)
+                    }
+                    imageWriter!!.queueInputImage(outImage)
+                }
+            } catch (e: IllegalStateException) {
+                // Expected backpressure behavior: No free buffers until app initiates CaptureRequest
+            } catch (e: Exception) {
+                Log.e(TAG, "FormatConverterBridge: ImageWriter push failed", e)
+            }
+        }.apply {
+            name = "VirtuCam-WriterPush"
+            start()
         }
     }
 

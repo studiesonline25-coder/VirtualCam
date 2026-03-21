@@ -40,55 +40,50 @@ class FrameInjector {
      * Inject bitmap as YUV_420_888 format (most common for camera preview)
      */
     private fun injectYUV420(image: Image, bitmap: Bitmap) {
-        try {
-            // Scale bitmap to match image dimensions
-            val scaledBitmap = Bitmap.createScaledBitmap(
-                bitmap, 
-                image.width, 
-                image.height, 
-                true
-            )
-            
-            // Convert ARGB to YUV
-            val yuvData = rgbToYuv420(scaledBitmap)
-            
-            // Get image planes
-            val planes = image.planes
-            val yPlane = planes[0] // Y plane
-            val uPlane = planes[1] // U plane  
-            val vPlane = planes[2] // V plane
-            
-            // Calculate plane sizes
-            val width = image.width
-            val height = image.height
-            val ySize = width * height
-            val uvSize = width * height / 4
-            
-            // Copy Y data
-            val yBuffer = yPlane.buffer
-            if (yBuffer.remaining() >= ySize) {
-                yBuffer.put(yuvData, 0, minOf(ySize, yBuffer.remaining()))
-            }
-            
-            // Copy U data
-            val uBuffer = uPlane.buffer
-            if (uBuffer.remaining() >= uvSize) {
-                uBuffer.put(yuvData, ySize, minOf(uvSize, uBuffer.remaining()))
-            }
-            
-            // Copy V data
-            val vBuffer = vPlane.buffer
-            if (vBuffer.remaining() >= uvSize) {
-                vBuffer.put(yuvData, ySize + uvSize, minOf(uvSize, vBuffer.remaining()))
-            }
-            
-            // Clean up scaled bitmap if different from original
-            if (scaledBitmap != bitmap) {
-                scaledBitmap.recycle()
-            }
-            
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to inject YUV420", e)
+        // Scale bitmap to match image dimensions
+        val scaledBitmap = Bitmap.createScaledBitmap(
+            bitmap, 
+            image.width, 
+            image.height, 
+            true
+        )
+        
+        // Convert ARGB to YUV
+        val yuvData = rgbToYuv420(scaledBitmap)
+        
+        // Get image planes
+        val planes = image.planes
+        val yPlane = planes[0] // Y plane
+        val uPlane = planes[1] // U plane  
+        val vPlane = planes[2] // V plane
+        
+        // Calculate plane sizes
+        val width = image.width
+        val height = image.height
+        val ySize = width * height
+        val uvSize = width * height / 4
+        
+        // Copy Y data
+        val yBuffer = yPlane.buffer
+        if (yBuffer.remaining() >= ySize) {
+            yBuffer.put(yuvData, 0, minOf(ySize, yBuffer.remaining()))
+        }
+        
+        // Copy U data
+        val uBuffer = uPlane.buffer
+        if (uBuffer.remaining() >= uvSize) {
+            uBuffer.put(yuvData, ySize, minOf(uvSize, uBuffer.remaining()))
+        }
+        
+        // Copy V data
+        val vBuffer = vPlane.buffer
+        if (vBuffer.remaining() >= uvSize) {
+            vBuffer.put(yuvData, ySize + uvSize, minOf(uvSize, vBuffer.remaining()))
+        }
+        
+        // Clean up scaled bitmap if different from original
+        if (scaledBitmap != bitmap) {
+            scaledBitmap.recycle()
         }
     }
     
@@ -96,31 +91,26 @@ class FrameInjector {
      * Inject bitmap as JPEG format
      */
     private fun injectJPEG(image: Image, bitmap: Bitmap) {
-        try {
-            val scaledBitmap = Bitmap.createScaledBitmap(
-                bitmap,
-                image.width,
-                image.height,
-                true
-            )
-            
-            // Compress to JPEG
-            val outputStream = ByteArrayOutputStream()
-            scaledBitmap.compress(Bitmap.CompressFormat.JPEG, 90, outputStream)
-            val jpegData = outputStream.toByteArray()
-            
-            // Write to image plane
-            val buffer = image.planes[0].buffer
-            if (buffer.remaining() >= jpegData.size) {
-                buffer.put(jpegData)
-            }
-            
-            if (scaledBitmap != bitmap) {
-                scaledBitmap.recycle()
-            }
-            
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to inject JPEG", e)
+        val scaledBitmap = Bitmap.createScaledBitmap(
+            bitmap,
+            image.width,
+            image.height,
+            true
+        )
+        
+        // Compress to JPEG
+        val outputStream = ByteArrayOutputStream()
+        scaledBitmap.compress(Bitmap.CompressFormat.JPEG, 90, outputStream)
+        val jpegData = outputStream.toByteArray()
+        
+        // Write to image plane
+        val buffer = image.planes[0].buffer
+        if (buffer.remaining() >= jpegData.size) {
+            buffer.put(jpegData)
+        }
+        
+        if (scaledBitmap != bitmap) {
+            scaledBitmap.recycle()
         }
     }
     
@@ -128,33 +118,27 @@ class FrameInjector {
      * Inject bitmap as NV21 format
      */
     private fun injectNV21(image: Image, bitmap: Bitmap) {
-        try {
-            val scaledBitmap = Bitmap.createScaledBitmap(
-                bitmap,
-                image.width,
-                image.height,
-                true
-            )
-            
-            val nv21Data = rgbToNV21(scaledBitmap)
-            
-            // NV21 typically has 2 planes: Y and interleaved VU
-            val yBuffer = image.planes[0].buffer
-            val vuBuffer = image.planes[1].buffer
-            
-            val ySize = image.width * image.height
-            
-            yBuffer.put(nv21Data, 0, minOf(ySize, yBuffer.remaining()))
-            vuBuffer.put(nv21Data, ySize, minOf(nv21Data.size - ySize, vuBuffer.remaining()))
-            
-            if (scaledBitmap != bitmap) {
-                scaledBitmap.recycle()
-            }
-            
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to inject frame in current format", e)
+        val scaledBitmap = Bitmap.createScaledBitmap(
+            bitmap,
+            image.width,
+            image.height,
+            true
+        )
+        
+        val nv21Data = rgbToNV21(scaledBitmap)
+        
+        // NV21 typically has 2 planes: Y and interleaved VU
+        val yBuffer = image.planes[0].buffer
+        val vuBuffer = image.planes[1].buffer
+        
+        val ySize = image.width * image.height
+        
+        yBuffer.put(nv21Data, 0, minOf(ySize, yBuffer.remaining()))
+        vuBuffer.put(nv21Data, ySize, minOf(nv21Data.size - ySize, vuBuffer.remaining()))
+        
+        if (scaledBitmap != bitmap) {
+            scaledBitmap.recycle()
         }
-    }
     
     /**
      * Convert ARGB Bitmap to YUV420 byte array
