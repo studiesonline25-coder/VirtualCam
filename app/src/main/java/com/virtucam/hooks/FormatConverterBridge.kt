@@ -45,35 +45,34 @@ class FormatConverterBridge(
             if (format == 0x22 || format == 0x1) {
                 Log.d(TAG, "Format 0x${Integer.toHexString(format)} natively supports EGL. Bypassing CPU bridge.")
                 release()
-                return
-            }
-            
-            // If the app expects something strict like YUV_420_888,
-            // we configure our receiver ImageReader to RGBA_8888 since that's what OpenGL natively produces.
-            imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
-            
-            handlerThread = HandlerThread("VirtuCamConversionThread").apply { start() }
-            handler = Handler(handlerThread!!.looper)
-            
-            imageReader?.setOnImageAvailableListener({ reader ->
-                val rgbaImage = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
-                var yuvImage: Image? = null
-                try {
-                    // Pull a blank, natively formatted buffer from the app's target surface queue
-                    yuvImage = imageWriter?.dequeueInputImage()
-                    if (yuvImage != null) {
-                        convertRgbaToYuvFast(rgbaImage, yuvImage)
-                        // Feed the correctly formatted buffer back into the app's queue
-                        imageWriter?.queueInputImage(yuvImage)
+            } else {
+                // If the app expects something strict like YUV_420_888,
+                // we configure our receiver ImageReader to RGBA_8888 since that's what OpenGL natively produces.
+                imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2)
+                
+                handlerThread = HandlerThread("VirtuCamConversionThread").apply { start() }
+                handler = Handler(handlerThread!!.looper)
+                
+                imageReader?.setOnImageAvailableListener({ reader ->
+                    val rgbaImage = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
+                    var yuvImage: Image? = null
+                    try {
+                        // Pull a blank, natively formatted buffer from the app's target surface queue
+                        yuvImage = imageWriter?.dequeueInputImage()
+                        if (yuvImage != null) {
+                            convertRgbaToYuvFast(rgbaImage, yuvImage)
+                            // Feed the correctly formatted buffer back into the app's queue
+                            imageWriter?.queueInputImage(yuvImage)
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Bridge loop error", e)
+                        // If queueing fails, we have to abort the image
+                    } finally {
+                        rgbaImage.close()
                     }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Bridge loop error", e)
-                    // If queueing fails, we have to abort the image
-                } finally {
-                    rgbaImage.close()
-                }
-            }, handler)
-            Log.d(TAG, "FormatConverterBridge started successfully. Buffer bridge active.")
+                }, handler)
+                Log.d(TAG, "FormatConverterBridge started successfully. Buffer bridge active.")
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to initialize FormatConverterBridge", e)
             release()
