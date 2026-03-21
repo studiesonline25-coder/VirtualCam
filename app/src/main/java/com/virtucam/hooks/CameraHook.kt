@@ -3,6 +3,7 @@ package com.virtucam.hooks
 import android.app.AndroidAppHelper
 import android.graphics.BitmapFactory
 import android.graphics.ImageFormat
+import android.media.Image
 import android.graphics.SurfaceTexture
 import android.net.Uri
 import android.opengl.GLES20
@@ -257,6 +258,9 @@ object CameraHook {
                                 return Pair(w, h)
                             }
                         }
+                    }
+                } catch (_: Throwable) {}
+            }
         } catch (_: Throwable) {}
         return Pair(1280, 720) // Safe default for the Redmi 14C
     }
@@ -537,6 +541,25 @@ object CameraHook {
         // Minimal stack trace scrubber signature
         // Advanced impl involves replacing the thread's StackTraceElement array
     }
+
+    /**
+     * Internal Camera Surface Utilities
+     */
+    private object SurfaceUtils {
+        fun getSurfaceFormat(surface: Surface): Int {
+            return try {
+                // On most Android versions, surface format is hard to reach via pure Java.
+                // Default to PRIVATE (0x22) which routes through the preview EGL path.
+                0x22
+            } catch (e: Exception) {
+                0x22
+            }
+        }
+
+        fun getSurfaceSize(surface: Surface): Pair<Int, Int> {
+            return Pair(1280, 720)
+        }
+    }
 }
 
 /**
@@ -667,27 +690,3 @@ class VirtualRenderThread(
     }
 }
 
-/**
- * Robust Internal Camera Utilities
- */
-private object SurfaceUtils {
-    fun getSurfaceFormat(surface: Surface): Int {
-        return try {
-            val nativeObject = XposedHelpers.callMethod(surface, "getNativeObject") as Long
-            // We use reflection to access internal native methods if possible, 
-            // or just assume YUV if it's not a known private texture.
-            // On most Android versions, the surface's internal format is hard to reach via pure Java/Xposed 
-            // without calling into native code.
-            // Simplified fallback: detect by surface name/type or just return 0x22 (PRIVATE)
-            // for surfaces that go into the preview, and 0x23 (YUV) for others.
-            0x22 // Default to Private (Preview)
-        } catch (e: Exception) {
-            0x22
-        }
-    }
-    
-    fun getSurfaceSize(surface: Surface): Pair<Int, Int> {
-        // Implementation for legacy surface size detection
-        return Pair(1280, 720)
-    }
-}
