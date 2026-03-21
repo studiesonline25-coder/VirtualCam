@@ -11,6 +11,11 @@ import android.opengl.GLUtils
 import android.opengl.Matrix
 import android.util.Log
 import android.view.Surface
+import android.os.Handler
+import android.media.ImageReader
+import java.util.Collections
+import java.util.WeakHashMap
+import java.util.HashSet
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
@@ -45,6 +50,10 @@ object CameraHook {
     // Maps original surfaces to their dummy replacements for CaptureRequest consistency
     private val surfaceMap = mutableMapOf<Surface, Surface>()
     private val activeBridges = mutableListOf<FormatConverterBridge>()
+    
+    // [ONCE AND FOR ALL] Surface tracking and crash prevention structures
+    private val surfaceFormats = Collections.synchronizedMap(WeakHashMap<Surface, Int>())
+    private val hookedListenerClasses = Collections.newSetFromMap(WeakHashMap<Class<*>, Boolean>())
 
     /**
      * Initialize all camera hooks
@@ -144,12 +153,30 @@ object CameraHook {
             "android.media.ImageReader", lpparam.classLoader
         ) ?: return
 
+        // [ONCE AND FOR ALL] Track Surface formats from ImageReader creation
+        XposedBridge.hookAllMethods(imageReaderClass, "newInstance", object : XC_MethodHook() {
+            override fun afterHookedMethod(param: MethodHookParam) {
+                val reader = param.result as? ImageReader ?: return
+                val format = param.args[2] as? Int ?: return
+                val surface = reader.surface
+                if (surface != null) {
+                    surfaceFormats[surface] = format
+                }
+            }
+        })
+
+        XposedBridge.hookAllMethods(imageReaderClass, "getSurface", object : XC_MethodHook() {
+            override fun afterHookedMethod(param: MethodHookParam) {
+                val reader = param.thisObject as? ImageReader ?: return
+                val surface = param.result as? Surface ?: return
+                val format = XposedHelpers.callMethod(reader, "getImageFormat") as? Int ?: return
+                surfaceFormats[surface] = format
+            }
+        })
+
         val overwriteHook = object : XC_MethodHook() {
             override fun afterHookedMethod(param: MethodHookParam) {
-                // CRITICAL: Suppress format mismatch exceptions from nativeImageSetup.
-                // Our dummy SurfaceTexture produces RGBA (0x1) but MIUI camera's ImageReader
-                // expects YUV (0x32315659). The native layer throws before we can overwrite.
-                // We catch it here and return null (no image) instead of crashing the app.
+                // Secondary Defense: Suppress format mismatch exceptions from nativeImageSetup.
                 if (param.throwable is UnsupportedOperationException) {
                     Log.d(TAG, "VirtuCam_Hook: Suppressed format mismatch: ${param.throwable?.message}")
                     param.throwable = null
@@ -161,7 +188,6 @@ object CameraHook {
                     val image = param.result as? Image ?: return
                     val format = image.format
                     // Data Override is exclusively for strictly validated formats like YUV.
-                    // Raw preview textures (0x22 PRIVATE) bypass this by using native EGL rendering.
                     if (format == ImageFormat.YUV_420_888 || format == ImageFormat.YV12 || format == 35) {
                         val bridge = activeBridges.firstOrNull { it.width == image.width && it.height == image.height }
                         if (bridge != null) {
@@ -177,34 +203,34 @@ object CameraHook {
         XposedBridge.hookAllMethods(imageReaderClass, "acquireNextImage", overwriteHook)
         XposedBridge.hookAllMethods(imageReaderClass, "acquireLatestImage", overwriteHook)
 
-        // CRITICAL: Wrap onImageAvailable listeners with NPE-safe wrappers.
-        // When our format mismatch suppression returns null from acquireNextImage(),
-        // the camera's onImageAvailable callback crashes with NPE because it calls
-        // image.getTimestamp() on the null result without null-checking.
-        // This wrapper catches that NPE so the camera gracefully skips those frames.
-        XposedHelpers.findAndHookMethod(
-            imageReaderClass,
-            "setOnImageAvailableListener",
-            android.media.ImageReader.OnImageAvailableListener::class.java,
-            android.os.Handler::class.java,
-            object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) {
-                    val originalListener = param.args[0] ?: return
-                    if (originalListener is android.media.ImageReader.OnImageAvailableListener) {
-                        // Replace with a wrapped listener that catches NPE
-                        param.args[0] = android.media.ImageReader.OnImageAvailableListener { reader ->
-                            try {
-                                originalListener.onImageAvailable(reader)
-                            } catch (e: NullPointerException) {
-                                // Silently skip - this happens when acquireNextImage returns null
-                                // due to our format mismatch suppression (RGBA vs YUV)
-                                Log.d(TAG, "VirtuCam_Hook: Suppressed NPE in onImageAvailable (format mismatch frame skip)")
+        // [ONCE AND FOR ALL] Robust Listener Protection
+        // We hook setOnImageAvailableListener to find the specific class of the listener.
+        // Then we defensively hook the 'onImageAvailable' method of that class to catch NPEs.
+        XposedBridge.hookAllMethods(imageReaderClass, "setOnImageAvailableListener", object : XC_MethodHook() {
+            override fun beforeHookedMethod(param: MethodHookParam) {
+                val listener = param.args[0] ?: return
+                val clazz = listener.javaClass
+                
+                synchronized(hookedListenerClasses) {
+                    if (hookedListenerClasses.contains(clazz)) return
+                    hookedListenerClasses.add(clazz)
+                }
+                
+                Log.d(TAG, "VirtuCam_Hook: Defensively wrapping NPE in listener class: ${clazz.name}")
+                try {
+                    XposedBridge.hookAllMethods(clazz, "onImageAvailable", object : XC_MethodHook() {
+                        override fun afterHookedMethod(innerParam: MethodHookParam) {
+                            if (innerParam.throwable is NullPointerException) {
+                                Log.e(TAG, "VirtuCam_Hook: CRASH PREVENTED - Caught NPE in ${clazz.name}.onImageAvailable. Details: ${innerParam.throwable?.message}")
+                                innerParam.throwable = null
                             }
                         }
-                    }
+                    })
+                } catch (e: Throwable) {
+                    Log.e(TAG, "VirtuCam_Hook: Failed to hook listener class ${clazz.name}", e)
                 }
             }
-        )
+        })
     }
 
     private fun hookCamera1(lpparam: XC_LoadPackage.LoadPackageParam) {
@@ -587,10 +613,16 @@ object CameraHook {
      */
     private object SurfaceUtils {
         fun getSurfaceFormat(surface: Surface): Int {
+            // Check our telemetry map first (populated via ImageReader hooks)
+            val trackedFormat = surfaceFormats[surface]
+            if (trackedFormat != null) {
+                return trackedFormat
+            }
+            
             return try {
-                // On most Android versions, surface format is hard to reach via pure Java.
-                // Default to PRIVATE (0x22) which routes through the preview EGL path.
-                0x22
+                // Heuristic: If we don't know the format, we try to guess if it's a preview surface.
+                // Preview surfaces usually don't have ImageReader metadata attached.
+                0x22 // Default to PRIVATE (Hijack-able)
             } catch (e: Exception) {
                 0x22
             }
