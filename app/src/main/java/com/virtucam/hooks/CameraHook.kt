@@ -152,28 +152,6 @@ object CameraHook {
                 }
             }
         })
-
-        // Suppress format mismatch in acquireLatestImage
-        XposedBridge.hookAllMethods(imageReaderClass, "acquireLatestImage", object : XC_MethodHook() {
-            override fun afterHookedMethod(param: MethodHookParam) {
-                if (param.throwable is UnsupportedOperationException) {
-                    Log.d(TAG, "VirtuCam_Hook: Suppressed ImageReader format mismatch in acquireLatestImage")
-                    param.throwable = null
-                    param.result = null
-                }
-            }
-        })
-
-        // Suppress format mismatch in acquireNextImage (returns Image Object, safe for null returns)
-        XposedBridge.hookAllMethods(imageReaderClass, "acquireNextImage", object : XC_MethodHook() {
-            override fun afterHookedMethod(param: MethodHookParam) {
-                if (param.throwable is UnsupportedOperationException) {
-                    Log.d(TAG, "VirtuCam_Hook: Suppressed ImageReader format mismatch in acquireNextImage")
-                    param.throwable = null
-                    param.result = null
-                }
-            }
-        })
     }
 
     private fun hookCamera1(lpparam: XC_LoadPackage.LoadPackageParam) {
@@ -278,32 +256,10 @@ object CameraHook {
     private fun swapSurfaceInOutputConfig(config: Any, targetSurface: Surface): Surface {
         val (w, h) = getSizeFromOutputConfig(config)
         
-        // 1. Attempt natively rendering YUV via GPU EGL to preserve Camera HAL usage flags
-        var nativeEglSupported = false
-        if (android.os.Build.VERSION.SDK_INT >= 28) {
-            try {
-                val tempCore = com.virtucam.opengl.EglCore()
-                val tempSurface = tempCore.createWindowSurface(targetSurface)
-                if (tempSurface != null) {
-                    tempCore.releaseSurface(tempSurface)
-                    nativeEglSupported = true
-                    Log.d(TAG, "VirtuCam_Hook: GPU natively supports rendering directly to target app's surface ($w x $h). Bypassing CPU bridge!")
-                }
-                tempCore.release()
-            } catch (e: Exception) {
-                Log.d(TAG, "VirtuCam_Hook: Target surface does not natively support EGL. Falling back to CPU bridge.")
-            }
-        }
-        
-        val resolvedSurface: Surface
-        if (nativeEglSupported) {
-            resolvedSurface = targetSurface
-        } else {
-            val bridge = FormatConverterBridge(targetSurface, w, h)
-            resolvedSurface = bridge.inputSurface ?: targetSurface
-            if (bridge.inputSurface != null) {
-                activeBridges.add(bridge)
-            }
+        val bridge = FormatConverterBridge(targetSurface, w, h)
+        val resolvedSurface = bridge.inputSurface ?: targetSurface
+        if (bridge.inputSurface != null) {
+            activeBridges.add(bridge)
         }
         
         val dummySurface = createDummySurface(targetSurface, w, h)
@@ -396,30 +352,10 @@ object CameraHook {
                             val targetSurfaces = ArrayList<Surface>()
                             
                             for (targetSurface in surfacesList) {
-                                // Attempt natively rendering YUV via GPU EGL to preserve Camera HAL usage flags
-                                var nativeEglSupported = false
-                                if (android.os.Build.VERSION.SDK_INT >= 28) {
-                                    try {
-                                        val tempCore = com.virtucam.opengl.EglCore()
-                                        val tempSurface = tempCore.createWindowSurface(targetSurface)
-                                        tempCore.releaseSurface(tempSurface)
-                                        nativeEglSupported = true
-                                        Log.d(TAG, "VirtuCam_Hook: GPU natively supports rendering directly to target app's surface. Bypassing CPU bridge!")
-                                        tempCore.release()
-                                    } catch (e: Exception) {
-                                        Log.d(TAG, "VirtuCam_Hook: Target surface does not natively support EGL. Falling back to CPU bridge.")
-                                    }
-                                }
-
-                                val resolvedSurface: Surface
-                                if (nativeEglSupported) {
-                                    resolvedSurface = targetSurface
-                                } else {
-                                    val bridge = FormatConverterBridge(targetSurface, 1280, 720)
-                                    resolvedSurface = bridge.inputSurface ?: targetSurface
-                                    if (bridge.inputSurface != null) {
-                                        activeBridges.add(bridge)
-                                    }
+                                val bridge = FormatConverterBridge(targetSurface, 1280, 720)
+                                val resolvedSurface = bridge.inputSurface ?: targetSurface
+                                if (bridge.inputSurface != null) {
+                                    activeBridges.add(bridge)
                                 }
 
                                 targetSurfaces.add(resolvedSurface)
