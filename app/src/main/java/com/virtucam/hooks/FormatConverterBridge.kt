@@ -55,10 +55,9 @@ class FormatConverterBridge(
                 
                 imageReader?.setOnImageAvailableListener({ reader ->
                     val rgbaImage = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
-                    var yuvImage: Image? = null
                     try {
                         // Pull a blank, natively formatted buffer from the app's target surface queue
-                        yuvImage = imageWriter?.dequeueInputImage()
+                        val yuvImage = imageWriter?.dequeueInputImage()
                         if (yuvImage != null) {
                             convertRgbaToYuvFast(rgbaImage, yuvImage)
                             // Feed the correctly formatted buffer back into the app's queue

@@ -402,11 +402,9 @@ object CameraHook {
                                     try {
                                         val tempCore = com.virtucam.opengl.EglCore()
                                         val tempSurface = tempCore.createWindowSurface(targetSurface)
-                                        if (tempSurface != null) {
-                                            tempCore.releaseSurface(tempSurface)
-                                            nativeEglSupported = true
-                                            Log.d(TAG, "VirtuCam_Hook: GPU natively supports rendering directly to target app's surface. Bypassing CPU bridge!")
-                                        }
+                                        tempCore.releaseSurface(tempSurface)
+                                        nativeEglSupported = true
+                                        Log.d(TAG, "VirtuCam_Hook: GPU natively supports rendering directly to target app's surface. Bypassing CPU bridge!")
                                         tempCore.release()
                                     } catch (e: Exception) {
                                         Log.d(TAG, "VirtuCam_Hook: Target surface does not natively support EGL. Falling back to CPU bridge.")
