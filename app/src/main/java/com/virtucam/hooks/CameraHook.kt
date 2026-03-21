@@ -12,6 +12,7 @@ import android.opengl.Matrix
 import android.util.Log
 import android.view.Surface
 import android.os.Handler
+import android.os.HandlerThread
 import android.media.ImageReader
 import java.util.Collections
 import java.util.WeakHashMap
