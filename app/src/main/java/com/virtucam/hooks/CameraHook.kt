@@ -68,6 +68,7 @@ object CameraHook {
             hookCameraManager(lpparam)
             hookImageReader(lpparam)
             hookCaptureRequest(lpparam)
+            hookSubmitCaptureRequest(lpparam)
             hookCameraError(lpparam)
             hookCameraDevice(lpparam)
             hookCameraDeviceOutputConfigurations(lpparam)
@@ -139,6 +140,72 @@ object CameraHook {
                     }
                 } catch (t: Throwable) {
                     Log.e(TAG, "VirtuCam_Hook: Error in CaptureRequest.addTarget hook", t)
+                }
+            }
+        })
+    }
+
+    /**
+     * The Ultimate Temporal Chokepoint:
+     * OEM Camera apps (like Xiaomi) often aggressively build their CaptureRequests using `addTarget`
+     * BEFORE they even call `createCaptureSession`! When this happens, our `addTarget` hook misses the swap
+     * because our `surfaceMap` is empty.
+     * To definitively prevent the fatal "CaptureRequest contains unconfigured Input/Output Surface" crash, we intercept
+     * `CameraDeviceImpl.submitCaptureRequest` (the final Java bottleneck before the native HAL). Here we reflectively 
+     * crack open the 'immutable' CaptureRequest and manually mutate its internal `mSurfaceSet` just milliseconds
+     * before Android validates it!
+     */
+    private fun hookSubmitCaptureRequest(lpparam: XC_LoadPackage.LoadPackageParam) {
+        val deviceImplClass = XposedHelpers.findClassIfExists(
+            "android.hardware.camera2.impl.CameraDeviceImpl", lpparam.classLoader
+        ) ?: return
+
+        XposedBridge.hookAllMethods(deviceImplClass, "submitCaptureRequest", object : XC_MethodHook() {
+            override fun beforeHookedMethod(param: MethodHookParam) {
+                if (!isEnabled || surfaceMap.isEmpty()) return
+
+                try {
+                    // First argument is List<CaptureRequest>
+                    val requestList = param.args[0] as? List<*> ?: return
+
+                    for (reqObj in requestList) {
+                        if (reqObj == null) continue
+                        val reqClass = reqObj.javaClass
+                        
+                        // CaptureRequest internally stores surfaces in `mSurfaceSet` (or `mTargetSurfaces` in older versions)
+                        var surfaceSetField = XposedHelpers.findFieldIfExists(reqClass, "mSurfaceSet")
+                        if (surfaceSetField == null) {
+                            surfaceSetField = XposedHelpers.findFieldIfExists(reqClass, "mTargetSurfaces")
+                        }
+                        
+                        if (surfaceSetField != null) {
+                            surfaceSetField.isAccessible = true
+                            val surfaceCollection = surfaceSetField.get(reqObj) as? Collection<*> ?: continue
+                            
+                            val toRemove = mutableListOf<Surface>()
+                            val toAdd = mutableListOf<Surface>()
+                            
+                            for (surfaceObj in surfaceCollection) {
+                                val s = surfaceObj as? Surface ?: continue
+                                val dummySurface = surfaceMap[s]
+                                if (dummySurface != null && dummySurface != s) {
+                                    toRemove.add(s)
+                                    toAdd.add(dummySurface)
+                                }
+                            }
+                            
+                            if (toRemove.isNotEmpty()) {
+                                // The collection is a MutableCollection (HashSet or ArraySet)
+                                @Suppress("UNCHECKED_CAST")
+                                val mutSet = surfaceCollection as MutableCollection<Surface>
+                                mutSet.removeAll(toRemove)
+                                mutSet.addAll(toAdd)
+                                Log.d(TAG, "VirtuCam_Hook: submitCaptureRequest CHOKEPOINT ACTIVATED -> Swapped ${toRemove.size} surfaces natively in immutable CaptureRequest!")
+                            }
+                        }
+                    }
+                } catch (t: Throwable) {
+                    Log.e(TAG, "VirtuCam_Hook: Error mutating immutable CaptureRequest in submitCaptureRequest", t)
                 }
             }
         })
