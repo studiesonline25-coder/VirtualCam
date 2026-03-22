@@ -765,9 +765,6 @@ class VirtualRenderThread(
             
             val uri = Uri.parse("content://com.virtucam.provider/file")
             
-            val viewWidth = eglCore!!.querySurface(eglSurface!!, android.opengl.EGL14.EGL_WIDTH)
-            val viewHeight = eglCore!!.querySurface(eglSurface!!, android.opengl.EGL14.EGL_HEIGHT)
-            
             if (isStream) {
                 // Live Stream Pipeline (ExoPlayer)
                 mediaSurfaceTexture = SurfaceTexture(textureRenderer!!.textureId)
@@ -783,6 +780,9 @@ class VirtualRenderThread(
                 
                 val matrix = FloatArray(16)
                 while (isRunning) {
+                    val viewWidth = eglCore!!.querySurface(eglSurface!!, android.opengl.EGL14.EGL_WIDTH)
+                    val viewHeight = eglCore!!.querySurface(eglSurface!!, android.opengl.EGL14.EGL_HEIGHT)
+                    
                     if (hasNewFrame.compareAndSet(true, false)) {
                         try {
                             mediaSurfaceTexture?.updateTexImage()
@@ -818,6 +818,9 @@ class VirtualRenderThread(
                     
                     val matrix = FloatArray(16)
                     while (isRunning) {
+                        val viewWidth = eglCore!!.querySurface(eglSurface!!, android.opengl.EGL14.EGL_WIDTH)
+                        val viewHeight = eglCore!!.querySurface(eglSurface!!, android.opengl.EGL14.EGL_HEIGHT)
+                        
                         if (hasNewFrame.compareAndSet(true, false)) {
                             try {
                                 mediaSurfaceTexture?.updateTexImage()
@@ -854,6 +857,9 @@ class VirtualRenderThread(
                     Matrix.setIdentityM(matrix, 0)
                     
                     while (isRunning) {
+                        val viewWidth = eglCore!!.querySurface(eglSurface!!, android.opengl.EGL14.EGL_WIDTH)
+                        val viewHeight = eglCore!!.querySurface(eglSurface!!, android.opengl.EGL14.EGL_HEIGHT)
+                        
                         textureRenderer?.draw(matrix, 0, staticImageW, staticImageH, viewWidth, viewHeight)
                         if (eglCore?.swapBuffers(eglSurface!!) == false) {
                             Log.w("VirtuCam_Render", "Target surface abandoned. Stopping Static Image thread.")

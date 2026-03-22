@@ -148,8 +148,9 @@ class TextureRenderer(private val isVideo: Boolean = true) {
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(target, textureId)
 
-        // Compute aspect ratio scaling (CENTER_CROP) to prevent elongation
+        // Compute aspect ratio scaling (FIT_CENTER) to prevent stretching
         Matrix.setIdentityM(mvpMatrix, 0)
+        Log.d("VirtuCam_Render", "TextureRenderer.draw: video=${videoWidth}x${videoHeight}, view=${viewWidth}x${viewHeight}")
         
         if (videoWidth > 0 && videoHeight > 0 && viewWidth > 0 && viewHeight > 0) {
             val videoRatio = videoWidth.toFloat() / videoHeight.toFloat()
