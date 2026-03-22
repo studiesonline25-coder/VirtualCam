@@ -199,7 +199,7 @@ class FormatConverterBridge(
             // Do NOT flip. We want the camera framework to read up to its native size.
             // Appending our JPEG at the start of the buffer is enough; BitmapFactory stops at EOF.
             jpegBuffer.position(0)
-            jpegBuffer.limit(jpegBuffer.capacity())
+            jpegBuffer.limit(bytesToWrite)
             
             Log.d(TAG, "FormatConverterBridge: Overwrote JPEG image (${jpegBytes.size} bytes)")
     }
