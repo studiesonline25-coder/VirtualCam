@@ -158,13 +158,14 @@ class TextureRenderer(private val isVideo: Boolean = true) {
             val scaleX: Float
             val scaleY: Float
             
-            // CENTER_CROP: fill the camera preview perfectly without stretching
+            // FIT_CENTER (CENTER_INSIDE): scale the quad to fit entirely inside the view (leaving black letterboxing/pillarboxing)
+            // This prevents video distortion and guarantees the entire video frame is visible exactly like standard galleries.
             if (videoRatio > viewRatio) {
-                scaleX = videoRatio / viewRatio
-                scaleY = 1f
-            } else {
                 scaleX = 1f
                 scaleY = viewRatio / videoRatio
+            } else {
+                scaleX = videoRatio / viewRatio
+                scaleY = 1f
             }
             
             Matrix.scaleM(mvpMatrix, 0, scaleX, scaleY, 1f)
