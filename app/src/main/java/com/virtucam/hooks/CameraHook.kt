@@ -775,10 +775,7 @@ class VirtualRenderThread(
     private fun getTargetRatio(vW: Int, vH: Int): Float {
         return try {
             val dm = android.content.res.Resources.getSystem().displayMetrics
-            val sW = dm.widthPixels.toFloat()
-            val sH = dm.heightPixels.toFloat()
-            val screenRatio = if (sH > sW) sW / sH else sH / sW
-            if (vW > vH) 1f / screenRatio else screenRatio
+            dm.widthPixels.toFloat() / dm.heightPixels.toFloat()
         } catch (e: Exception) {
             vW.toFloat() / vH.toFloat()
         }
