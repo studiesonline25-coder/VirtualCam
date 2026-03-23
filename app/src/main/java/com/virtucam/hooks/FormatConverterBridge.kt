@@ -180,45 +180,9 @@ class FormatConverterBridge(
             }
             
             // Create Bitmap from cached RGBA
-            var bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
             val rgbaBuffer = ByteBuffer.wrap(rgbaBytes)
             bitmap.copyPixelsFromBuffer(rgbaBuffer)
-            
-            // Extract original JPEG bytes from buffer to detect Hardware EXIF Rotation
-            val originalLimit = jpegBuffer.limit()
-            jpegBuffer.position(0)
-            val originalJpegBytes = ByteArray(originalLimit)
-            jpegBuffer.get(originalJpegBytes)
-            
-            try {
-                // Parse Hardware JPEG to read physical sensor orientation (usually 90 or 270 on phones, or 180 for upside-down)
-                val exifInterface = android.media.ExifInterface(java.io.ByteArrayInputStream(originalJpegBytes))
-                val orientation = exifInterface.getAttributeInt(
-                    android.media.ExifInterface.TAG_ORIENTATION,
-                    android.media.ExifInterface.ORIENTATION_NORMAL
-                )
-                
-                val rotationDegrees = when (orientation) {
-                    android.media.ExifInterface.ORIENTATION_ROTATE_90 -> 90f
-                    android.media.ExifInterface.ORIENTATION_ROTATE_180 -> 180f
-                    android.media.ExifInterface.ORIENTATION_ROTATE_270 -> 270f
-                    else -> 0f
-                }
-                
-                // Physically apply the rotation to our upright spoofed Bitmap
-                // This guarantees our spoofed pixels exactly mimic the hardware sensor's rotated layout
-                // before the OEM camera app processes and tags the final EXIF (e.g. CAM_ExifTool putting orientation=180).
-                if (rotationDegrees != 0f) {
-                    val matrix = android.graphics.Matrix()
-                    matrix.postRotate(rotationDegrees)
-                    val rotatedBitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-                    bitmap.recycle()
-                    bitmap = rotatedBitmap
-                    Log.d(TAG, "FormatConverterBridge: Physically rotated spoofed Bitmap by $rotationDegrees degrees to mimic Hardware EXIF")
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "FormatConverterBridge: Failed to parse/apply Original EXIF rotation", e)
-            }
             
             // Compress to JPEG
             val baos = ByteArrayOutputStream()

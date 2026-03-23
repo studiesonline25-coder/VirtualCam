@@ -807,8 +807,7 @@ class VirtualRenderThread(
                         } catch (e: Exception) {}
                     }
                     mediaSurfaceTexture?.getTransformMatrix(matrix)
-                    
-                    textureRenderer?.draw(matrix, sensorOrientation, streamPlayer!!.videoWidth, streamPlayer!!.videoHeight, viewWidth, viewHeight)
+                    textureRenderer?.draw(matrix, sensorOrientation, 0, streamPlayer!!.videoWidth, streamPlayer!!.videoHeight, viewWidth, viewHeight)
                     if (eglCore?.swapBuffers(eglSurface!!) == false) {
                         Log.w("VirtuCam_Render", "Target surface abandoned during stream. Stopping thread.")
                         quit()
@@ -847,7 +846,7 @@ class VirtualRenderThread(
                         }
                         mediaSurfaceTexture?.getTransformMatrix(matrix)
                         
-                        textureRenderer?.draw(matrix, sensorOrientation, videoPlayer!!.videoWidth, videoPlayer!!.videoHeight, viewWidth, viewHeight)
+                        textureRenderer?.draw(matrix, sensorOrientation, videoPlayer!!.videoRotation, videoPlayer!!.videoWidth, videoPlayer!!.videoHeight, viewWidth, viewHeight)
                         if (eglCore?.swapBuffers(eglSurface!!) == false) {
                             Log.w("VirtuCam_Render", "Target surface abandoned during video. Stopping thread.")
                             quit()
@@ -879,8 +878,7 @@ class VirtualRenderThread(
                     while (isRunning) {
                         val viewWidth = eglCore!!.querySurface(eglSurface!!, android.opengl.EGL14.EGL_WIDTH)
                         val viewHeight = eglCore!!.querySurface(eglSurface!!, android.opengl.EGL14.EGL_HEIGHT)
-                        
-                        textureRenderer?.draw(matrix, sensorOrientation, staticImageW, staticImageH, viewWidth, viewHeight)
+                        textureRenderer?.draw(matrix, sensorOrientation, 0, staticImageW, staticImageH, viewWidth, viewHeight)
                         if (eglCore?.swapBuffers(eglSurface!!) == false) {
                             Log.w("VirtuCam_Render", "Target surface abandoned. Stopping Static Image thread.")
                             quit()

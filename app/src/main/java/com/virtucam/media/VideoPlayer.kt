@@ -14,10 +14,14 @@ import java.io.FileDescriptor
  * Implements continuous looping.
  */
 class VideoPlayer(
-    private val fd: FileDescriptor,
-    private val outputSurface: Surface,
-    private val onFrameAvailable: () -> Unit
+    val fd: FileDescriptor,
+    val outputSurface: Surface,
+    val onPlaybackEnded: () -> Unit
 ) {
+
+    var videoWidth: Int = 0
+    var videoHeight: Int = 0
+    var videoRotation: Int = 0
 
     companion object {
         private const val TAG = "VideoPlayer"
@@ -95,12 +99,12 @@ class VideoPlayer(
         
         // Correct dimensions if the video has an EXIF rotation metadata
         if (format.containsKey(MediaFormat.KEY_ROTATION)) {
-            val rotation = format.getInteger(MediaFormat.KEY_ROTATION)
-            if (rotation == 90 || rotation == 270) {
+            videoRotation = format.getInteger(MediaFormat.KEY_ROTATION)
+            if (videoRotation == 90 || videoRotation == 270) {
                 val temp = videoWidth
                 videoWidth = videoHeight
                 videoHeight = temp
-                Log.d(TAG, "Swapped dimensions because EXIF rotation is $rotation. New size: ${videoWidth}x${videoHeight}")
+                Log.d(TAG, "Swapped dimensions because EXIF rotation is $videoRotation. New size: \${videoWidth}x\${videoHeight}")
             }
         }
 
