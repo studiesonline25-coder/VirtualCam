@@ -471,7 +471,7 @@ object CameraHook {
     }
 
     @Volatile
-    private var compensationFactor: Float = 1.0f
+    var compensationFactor: Float = 1.0f
 
     /**
      * Poll configuration via ContentProvider
@@ -779,7 +779,7 @@ class VirtualRenderThread(
     private fun getTargetRatio(vW: Int, vH: Int): Float {
         return try {
             // Most modern camera apps stretch 4:3 buffers to exactly a 16:9 preview area.
-            (9f / 16f) * compensationFactor
+            (9f / 16f) * CameraHook.compensationFactor
         } catch (e: Exception) {
             vW.toFloat() / vH.toFloat()
         }
