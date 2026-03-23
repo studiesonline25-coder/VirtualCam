@@ -137,7 +137,7 @@ class TextureRenderer(private val isVideo: Boolean = true) {
     /**
      * Draw the texture to currently bound frame buffer
      */
-    fun draw(transformMatrix: FloatArray, videoWidth: Int = 0, videoHeight: Int = 0, viewWidth: Int = 0, viewHeight: Int = 0) {
+    fun draw(transformMatrix: FloatArray, videoWidth: Int = 0, videoHeight: Int = 0, viewWidth: Int = 0, viewHeight: Int = 0, targetRatio: Float = 0f) {
         GLES20.glClearColor(0.0f, 0.0f, 0.0f, 1.0f)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
 
@@ -153,8 +153,9 @@ class TextureRenderer(private val isVideo: Boolean = true) {
         Log.d("VirtuCam_Render", "TextureRenderer.draw: video=${videoWidth}x${videoHeight}, view=${viewWidth}x${viewHeight}")
         
         if (videoWidth > 0 && videoHeight > 0 && viewWidth > 0 && viewHeight > 0) {
+            // Use the provided targetRatio (e.g. screen aspect) if valid, otherwise fallback to physical surface ratio.
+            val viewRatio = if (targetRatio > 0f) targetRatio else (viewWidth.toFloat() / viewHeight.toFloat())
             val videoRatio = videoWidth.toFloat() / videoHeight.toFloat()
-            val viewRatio = viewWidth.toFloat() / viewHeight.toFloat()
             
             val scaleX: Float
             val scaleY: Float

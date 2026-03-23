@@ -771,7 +771,19 @@ class VirtualRenderThread(
     
     private var mediaSurfaceTexture: SurfaceTexture? = null
     private var mediaSurface: Surface? = null
-    
+
+    private fun getTargetRatio(vW: Int, vH: Int): Float {
+        return try {
+            val dm = android.content.res.Resources.getSystem().displayMetrics
+            val sW = dm.widthPixels.toFloat()
+            val sH = dm.heightPixels.toFloat()
+            val screenRatio = if (sH > sW) sW / sH else sH / sW
+            if (vW > vH) 1f / screenRatio else screenRatio
+        } catch (e: Exception) {
+            vW.toFloat() / vH.toFloat()
+        }
+    }
+
     override fun run() {
         try {
             eglCore = EglCore()
@@ -807,7 +819,7 @@ class VirtualRenderThread(
                         } catch (e: Exception) {}
                     }
                     mediaSurfaceTexture?.getTransformMatrix(matrix)
-                    textureRenderer?.draw(matrix, streamPlayer!!.videoWidth, streamPlayer!!.videoHeight, viewWidth, viewHeight)
+                    textureRenderer?.draw(matrix, streamPlayer!!.videoWidth, streamPlayer!!.videoHeight, viewWidth, viewHeight, getTargetRatio(viewWidth, viewHeight))
                     if (eglCore?.swapBuffers(eglSurface!!) == false) {
                         Log.w("VirtuCam_Render", "Target surface abandoned during stream. Stopping thread.")
                         quit()
@@ -845,7 +857,7 @@ class VirtualRenderThread(
                             } catch (e: Exception) {}
                         }
                         mediaSurfaceTexture?.getTransformMatrix(matrix)
-                        textureRenderer?.draw(matrix, videoPlayer!!.videoWidth, videoPlayer!!.videoHeight, viewWidth, viewHeight)
+                        textureRenderer?.draw(matrix, videoPlayer!!.videoWidth, videoPlayer!!.videoHeight, viewWidth, viewHeight, getTargetRatio(viewWidth, viewHeight))
                         if (eglCore?.swapBuffers(eglSurface!!) == false) {
                             Log.w("VirtuCam_Render", "Target surface abandoned during video. Stopping thread.")
                             quit()
@@ -877,7 +889,7 @@ class VirtualRenderThread(
                     while (isRunning) {
                         val viewWidth = eglCore!!.querySurface(eglSurface!!, android.opengl.EGL14.EGL_WIDTH)
                         val viewHeight = eglCore!!.querySurface(eglSurface!!, android.opengl.EGL14.EGL_HEIGHT)
-                        textureRenderer?.draw(matrix, staticImageW, staticImageH, viewWidth, viewHeight)
+                        textureRenderer?.draw(matrix, staticImageW, staticImageH, viewWidth, viewHeight, getTargetRatio(viewWidth, viewHeight))
                         if (eglCore?.swapBuffers(eglSurface!!) == false) {
                             Log.w("VirtuCam_Render", "Target surface abandoned. Stopping Static Image thread.")
                             quit()
