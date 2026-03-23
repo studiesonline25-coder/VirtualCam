@@ -427,11 +427,12 @@ object CameraHook {
      * Extract width/height from an OutputConfiguration via reflection
      */
     private fun getSizeFromOutputConfig(config: Any): Pair<Int, Int> {
+        var surface: Surface? = null
         try {
             val getSurfaceMethod = config.javaClass.getMethod("getSurface")
-            val surface = getSurfaceMethod.invoke(config) as? Surface
+            surface = getSurfaceMethod.invoke(config) as? Surface
             if (surface != null) {
-                // Try to get size from the Surface's internal canvas or native fields
+                // Try to get size from the OutputConfiguration's internal fields first
                 try {
                     val mConfiguredWidthField = XposedHelpers.findFieldIfExists(config.javaClass, "mConfiguredSize")
                     if (mConfiguredWidthField != null) {
@@ -465,7 +466,7 @@ object CameraHook {
             }
         } catch (_: Throwable) {}
         
-        // Final fallback: try our manual tracking map
+        // Final fallback: try our manual tracking map using the extracted surface
         if (surface != null) {
             val tracked = surfaceSizes[surface]
             if (tracked != null) {
