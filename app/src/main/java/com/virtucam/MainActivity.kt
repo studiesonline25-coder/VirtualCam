@@ -102,6 +102,25 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "Please enter a valid RTSP/RTMP stream URL", Toast.LENGTH_SHORT).show()
             }
         }
+
+        // Setup compensation slider
+        // Range 0.0x to 2.0x (progress 0..200)
+        binding.seekCompensation.progress = (config.compensationFactor * 100).toInt()
+        binding.tvCompensationValue.text = String.format("Stretch Factor: %.2fx", config.compensationFactor)
+        
+        binding.seekCompensation.setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: android.widget.SeekBar?, progress: Int, fromUser: Boolean) {
+                if (fromUser) {
+                    val factor = progress / 100f
+                    config.compensationFactor = factor
+                    binding.tvCompensationValue.text = String.format("Stretch Factor: %.2fx", factor)
+                }
+            }
+            override fun onStartTrackingTouch(seekBar: android.widget.SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: android.widget.SeekBar?) {
+                // Settings are already saved via setter in config
+            }
+        })
     }
     
     private fun loadSavedState() {

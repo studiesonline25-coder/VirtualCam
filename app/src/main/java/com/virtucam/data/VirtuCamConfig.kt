@@ -49,6 +49,16 @@ class VirtuCamConfig(context: Context) {
     var streamUrl: String?
         get() = prefs.getString("stream_url", null)
         set(value) = prefs.edit().putString("stream_url", value).apply()
+
+    /**
+     * Aspect ratio compensation factor (user nudge)
+     * 1.0 = Default (16:9 target)
+     * > 1.0 = Increase height
+     * < 1.0 = Decrease height
+     */
+    var compensationFactor: Float
+        get() = prefs.getFloat("compensation_factor", 1.0f)
+        set(value) = prefs.edit().putFloat("compensation_factor", value).apply()
     
     /**
      * List of package names for apps to target
