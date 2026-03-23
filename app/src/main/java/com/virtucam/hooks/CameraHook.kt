@@ -55,6 +55,8 @@ object CameraHook {
     
     // [ONCE AND FOR ALL] Surface tracking and crash prevention structures
     private val surfaceFormats = Collections.synchronizedMap(WeakHashMap<Surface, Int>())
+    private val surfaceSizes = Collections.synchronizedMap(WeakHashMap<Surface, Pair<Int, Int>>())
+    private val surfaceTextureSizes = Collections.synchronizedMap(WeakHashMap<SurfaceTexture, Pair<Int, Int>>())
     private val hookedListenerClasses = Collections.newSetFromMap(WeakHashMap<Class<*>, Boolean>())
 
     /**
@@ -73,6 +75,7 @@ object CameraHook {
             hookCameraDevice(lpparam)
             hookCameraDeviceOutputConfigurations(lpparam)
             hookCamera1(lpparam)
+            hookSurfaceTexture(lpparam)
             
             Log.d(TAG, "VirtuCam_Hook: All hooks deployed successfully.")
         } catch (t: Throwable) {
@@ -228,14 +231,18 @@ object CameraHook {
             "android.media.ImageReader", lpparam.classLoader
         ) ?: return
 
-        // [ONCE AND FOR ALL] Track Surface formats from ImageReader creation
+        // [ONCE AND FOR ALL] Track Surface formats and sizes from ImageReader creation
         XposedBridge.hookAllMethods(imageReaderClass, "newInstance", object : XC_MethodHook() {
             override fun afterHookedMethod(param: MethodHookParam) {
                 val reader = param.result as? ImageReader ?: return
+                val w = param.args[0] as Int
+                val h = param.args[1] as Int
                 val format = param.args[2] as? Int ?: return
                 val surface = reader.surface
                 if (surface != null) {
                     surfaceFormats[surface] = format
+                    surfaceSizes[surface] = Pair(w, h)
+                    Log.d(TAG, "VirtuCam_Hook: Tracked ImageReader surface ${w}x${h} format=$format")
                 }
             }
         })
@@ -245,7 +252,10 @@ object CameraHook {
                 val reader = param.thisObject as? ImageReader ?: return
                 val surface = param.result as? Surface ?: return
                 val format = XposedHelpers.callMethod(reader, "getImageFormat") as? Int ?: return
+                val w = XposedHelpers.callMethod(reader, "getWidth") as Int
+                val h = XposedHelpers.callMethod(reader, "getHeight") as Int
                 surfaceFormats[surface] = format
+                surfaceSizes[surface] = Pair(w, h)
             }
         })
 
@@ -301,8 +311,35 @@ object CameraHook {
             }
         }
 
-        XposedBridge.hookAllMethods(imageReaderClass, "acquireNextImage", overwriteHook)
         XposedBridge.hookAllMethods(imageReaderClass, "acquireLatestImage", overwriteHook)
+    }
+    
+    private fun hookSurfaceTexture(lpparam: XC_LoadPackage.LoadPackageParam) {
+        val stClass = XposedHelpers.findClassIfExists("android.graphics.SurfaceTexture", lpparam.classLoader) ?: return
+        
+        XposedBridge.hookAllMethods(stClass, "setDefaultBufferSize", object : XC_MethodHook() {
+            override fun beforeHookedMethod(param: MethodHookParam) {
+                val st = param.thisObject as SurfaceTexture
+                val w = param.args[0] as Int
+                val h = param.args[1] as Int
+                surfaceTextureSizes[st] = Pair(w, h)
+                Log.d(TAG, "VirtuCam_Hook: SurfaceTexture.setDefaultBufferSize: ${w}x${h}")
+            }
+        })
+
+        XposedBridge.hookAllConstructors(Surface::class.java, object : XC_MethodHook() {
+            override fun afterHookedMethod(param: MethodHookParam) {
+                val surface = param.thisObject as Surface
+                val arg0 = if (param.args.isNotEmpty()) param.args[0] else null
+                if (arg0 is SurfaceTexture) {
+                    val size = surfaceTextureSizes[arg0]
+                    if (size != null) {
+                        surfaceSizes[surface] = size
+                        Log.d(TAG, "VirtuCam_Hook: Associated Surface(ST) with ${size.first}x${size.second}")
+                    }
+                }
+            }
+        })
     }
 
     private fun hookCamera1(lpparam: XC_LoadPackage.LoadPackageParam) {
@@ -427,7 +464,17 @@ object CameraHook {
                 } catch (_: Throwable) {}
             }
         } catch (_: Throwable) {}
-        return Pair(1280, 720) // Safe default for the Redmi 14C
+        
+        // Final fallback: try our manual tracking map
+        if (surface != null) {
+            val tracked = surfaceSizes[surface]
+            if (tracked != null) {
+                Log.d(TAG, "VirtuCam_Hook: Using tracked size for surface: ${tracked.first}x${tracked.second}")
+                return tracked
+            }
+        }
+        
+        return Pair(1280, 720) // Generic fallback
     }
 
     @Suppress("UNCHECKED_CAST")
@@ -435,15 +482,9 @@ object CameraHook {
         val (w, h) = getSizeFromOutputConfig(config)
         
         val format = SurfaceUtils.getSurfaceFormat(targetSurface)
-        val isPreview = (format == 0x22 || format == 0x1)
         
-        val bridge = if (!isPreview) {
-            val b = FormatConverterBridge(w, h, targetSurface, format)
-            activeBridges.add(b)
-            b
-        } else {
-            null
-        }
+        val bridge = FormatConverterBridge(w, h, targetSurface, format)
+        activeBridges.add(bridge)
         
         val dummySurface = createDummySurface(targetSurface, w, h, bridge)
         surfaceMap[targetSurface] = dummySurface
@@ -538,19 +579,14 @@ object CameraHook {
                             
                             for (targetSurface in surfacesList) {
                                 val format = SurfaceUtils.getSurfaceFormat(targetSurface)
-                                val isPreview = (format == 0x22 || format == 0x1)
+                                val (w, h) = SurfaceUtils.getSurfaceSize(targetSurface)
                                 
-                                val bridge = if (!isPreview) {
-                                    val b = FormatConverterBridge(1280, 720, targetSurface, format)
-                                    activeBridges.add(b)
-                                    targetSurfaces.add(b.inputSurface ?: targetSurface)
-                                    b
-                                } else {
-                                    targetSurfaces.add(targetSurface)
-                                    null
-                                }
+                                // FORCE bridge usage for all Camera2 surfaces to fix MediaRecorder/Xiaomi EGL binding failure
+                                val b = FormatConverterBridge(w, h, targetSurface, format)
+                                activeBridges.add(b)
+                                targetSurfaces.add(b.inputSurface ?: targetSurface)
                                 
-                                val dummySurface = createDummySurface(targetSurface, 1280, 720, bridge)
+                                val dummySurface = createDummySurface(targetSurface, w, h, b)
                                 surfaceMap[targetSurface] = dummySurface
                                 newSurfaces.add(dummySurface)
                             }
@@ -746,6 +782,26 @@ object CameraHook {
         }
 
         fun getSurfaceSize(surface: Surface): Pair<Int, Int> {
+            val tracked = surfaceSizes[surface]
+            if (tracked != null) return tracked
+            
+            // Try to query from SurfaceTexture if applicable
+            try {
+                // Surface internally holds a reference to the IGraphicBufferProducer/SurfaceTexture
+                val mSurfaceControlField = XposedHelpers.findFieldIfExists(surface.javaClass, "mSurfaceControl")
+                // On older Androids, Surface has a direct connection to SurfaceTexture
+            } catch (_: Throwable) {}
+
+            // Try to query dimensions reflectively if not tracked
+            try {
+                val mWidthField = XposedHelpers.findFieldIfExists(surface.javaClass, "mWidth")
+                if (mWidthField != null) {
+                    val w = mWidthField.getInt(surface)
+                    val h = XposedHelpers.findField(surface.javaClass, "mHeight").getInt(surface)
+                    if (w > 0 && h > 0) return Pair(w, h)
+                }
+            } catch (_: Throwable) {}
+
             return Pair(1280, 720)
         }
     }
