@@ -137,7 +137,7 @@ class TextureRenderer(private val isVideo: Boolean = true) {
     /**
      * Draw the texture to currently bound frame buffer
      */
-    fun draw(transformMatrix: FloatArray, rotationDegrees: Int, textureRotationDegrees: Int = 0, videoWidth: Int = 0, videoHeight: Int = 0, viewWidth: Int = 0, viewHeight: Int = 0) {
+    fun draw(transformMatrix: FloatArray, textureRotationDegrees: Int = 0, videoWidth: Int = 0, videoHeight: Int = 0, viewWidth: Int = 0, viewHeight: Int = 0) {
         GLES20.glClearColor(0.0f, 0.0f, 0.0f, 1.0f)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
 
@@ -153,14 +153,7 @@ class TextureRenderer(private val isVideo: Boolean = true) {
         Log.d("VirtuCam_Render", "TextureRenderer.draw: video=${videoWidth}x${videoHeight}, view=${viewWidth}x${viewHeight}")
         
         if (videoWidth > 0 && videoHeight > 0 && viewWidth > 0 && viewHeight > 0) {
-            var rotatedVideoW = videoWidth
-            var rotatedVideoH = videoHeight
-            if (rotationDegrees == 90 || rotationDegrees == 270) {
-                rotatedVideoW = videoHeight
-                rotatedVideoH = videoWidth
-            }
-            
-            val videoRatio = rotatedVideoW.toFloat() / rotatedVideoH.toFloat()
+            val videoRatio = videoWidth.toFloat() / videoHeight.toFloat()
             val viewRatio = viewWidth.toFloat() / viewHeight.toFloat()
             
             val scaleX: Float
@@ -175,17 +168,10 @@ class TextureRenderer(private val isVideo: Boolean = true) {
                 scaleY = 1f
             }
             
-            // To properly orient the spoofed video into a Hardware Sensor buffer that downstream 
-            // camera apps expect to be physically rotated (e.g. SENSOR_ORIENTATION=90), we MUST physically 
-            // rotate the drawn geometry.
-            // In Android OpenGL, matrix operations are logically applied in Reverse Mathematical Order.
-            // Calling scaleM() then rotateM() instructs the shader vertex multiplication to Rotate FIRST, then Scale SECOND.
+            // To properly orient the spoofed video, we scale the geometry to preserve aspect ratio.
+            // Android camera previews default to drawing perfectly upright without requiring 
+            // a global geometric hardware orientation offset during spoofing playback.
             Matrix.scaleM(mvpMatrix, 0, scaleX, scaleY, 1f)
-            
-            if (rotationDegrees != 0) {
-                // CCW rotation logically offsets the downstream CW rotation applied by OEM EXIF viewing chains
-                Matrix.rotateM(mvpMatrix, 0, rotationDegrees.toFloat(), 0f, 0f, 1f)
-            }
         }
 
         // Copy transform matrix from SurfaceTexture
