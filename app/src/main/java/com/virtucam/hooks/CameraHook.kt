@@ -355,9 +355,11 @@ object CameraHook {
         reader.setOnImageAvailableListener({ ir ->
             try {
                 // Instantly consume and discard the image to keep the pipeline flowing
-                ir.acquireNextImage()?.close()
+                val realImage = ir.acquireNextImage()
+                val realTimestamp = realImage?.timestamp ?: 0L
+                realImage?.close()
                 // Sync Trigger: The real camera just took a photo! Push our spoofed frame to the app NOW!
-                bridge?.pushLatestFrameToWriter()
+                bridge?.pushLatestFrameToWriter(realTimestamp)
             } catch (e: Exception) {
                 // Ignore errors during discard
             }

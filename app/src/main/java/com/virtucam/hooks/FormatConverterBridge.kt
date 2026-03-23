@@ -217,13 +217,16 @@ class FormatConverterBridge(
      * Manually push the latest cached RGBA frame into the native ImageWriter.
      * Call this ONLY when the real camera signals a capture event to prevent native BufferQueue starvation and SIGSEGV block crashing.
      */
-    fun pushLatestFrameToWriter() {
+    fun pushLatestFrameToWriter(timestamp: Long = 0L) {
         if (imageWriter == null) return
         try {
             val outImage = imageWriter!!.dequeueInputImage()
             if (outImage != null) {
                 var success = false
                 try {
+                    if (timestamp > 0) {
+                        outImage.timestamp = timestamp
+                    }
                     if (outImage.format == 256 || outputFormat == 256) {
                         overwriteImageWithLatestJpeg(outImage)
                     } else {
