@@ -470,10 +470,13 @@ object CameraHook {
         return bridge?.inputSurface ?: targetSurface
     }
 
+    @Volatile
+    private var compensationFactor: Float = 1.0f
+
     /**
      * Poll configuration via ContentProvider
      */
-    private fun loadConfiguration() {
+    fun loadConfiguration() {
         try {
             val context = AndroidAppHelper.currentApplication() ?: return
             val uri = Uri.parse("content://com.virtucam.provider/config")
@@ -488,8 +491,9 @@ object CameraHook {
                         isVideo = if (it.columnCount > 2) it.getInt(2) == 1 else false
                         isStream = if (it.columnCount > 3) it.getInt(3) == 1 else false
                         streamUrl = if (it.columnCount > 4) it.getString(4) ?: "" else ""
+                        compensationFactor = if (it.columnCount > 6) it.getFloat(6) else 1.0f
                         
-                        Log.d(TAG, "VirtuCam_Hook: Config loaded. Enabled: $isEnabled, Stream: $isStream")
+                        Log.d(TAG, "VirtuCam_Hook: Config loaded. Enabled: $isEnabled, Factor: $compensationFactor")
                     } catch (innerE: Exception) {
                         Log.e(TAG, "VirtuCam_Hook: Error parsing cursor columns", innerE)
                     }
@@ -774,10 +778,8 @@ class VirtualRenderThread(
 
     private fun getTargetRatio(vW: Int, vH: Int): Float {
         return try {
-            val config = com.virtucam.data.VirtuCamConfig.getInstance(context)
-            val factor = config.compensationFactor
             // Most modern camera apps stretch 4:3 buffers to exactly a 16:9 preview area.
-            (9f / 16f) * factor
+            (9f / 16f) * compensationFactor
         } catch (e: Exception) {
             vW.toFloat() / vH.toFloat()
         }
@@ -807,8 +809,14 @@ class VirtualRenderThread(
                 streamPlayer = StreamPlayer(context, streamUrl, mediaSurface!!) {}
                 streamPlayer!!.start()
                 
+                var frameCount = 0
                 val matrix = FloatArray(16)
                 while (isRunning) {
+                    frameCount++
+                    if (frameCount % 60 == 0) {
+                        CameraHook.loadConfiguration()
+                    }
+                    
                     val viewWidth = eglCore!!.querySurface(eglSurface!!, android.opengl.EGL14.EGL_WIDTH)
                     val viewHeight = eglCore!!.querySurface(eglSurface!!, android.opengl.EGL14.EGL_HEIGHT)
                     
@@ -845,8 +853,14 @@ class VirtualRenderThread(
                     videoPlayer = VideoPlayer(fd, mediaSurface!!) {}
                     videoPlayer!!.start()
                     
+                    var frameCount = 0
                     val matrix = FloatArray(16)
                     while (isRunning) {
+                        frameCount++
+                        if (frameCount % 60 == 0) {
+                            CameraHook.loadConfiguration()
+                        }
+                        
                         val viewWidth = eglCore!!.querySurface(eglSurface!!, android.opengl.EGL14.EGL_WIDTH)
                         val viewHeight = eglCore!!.querySurface(eglSurface!!, android.opengl.EGL14.EGL_HEIGHT)
                         
@@ -882,10 +896,16 @@ class VirtualRenderThread(
                     GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bitmap, 0)
                     bitmap.recycle()
                     
+                    var frameCount = 0
                     val matrix = FloatArray(16)
                     Matrix.setIdentityM(matrix, 0)
                     
                     while (isRunning) {
+                        frameCount++
+                        if (frameCount % 60 == 0) {
+                            CameraHook.loadConfiguration()
+                        }
+                        
                         val viewWidth = eglCore!!.querySurface(eglSurface!!, android.opengl.EGL14.EGL_WIDTH)
                         val viewHeight = eglCore!!.querySurface(eglSurface!!, android.opengl.EGL14.EGL_HEIGHT)
                         textureRenderer?.draw(matrix, staticImageW, staticImageH, viewWidth, viewHeight, getTargetRatio(viewWidth, viewHeight))
