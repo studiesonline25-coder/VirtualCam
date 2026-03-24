@@ -59,7 +59,7 @@ object CameraHook {
 
     // [ONCE AND FOR ALL] Surface tracking and crash prevention structures
     private val surfaceFormats = Collections.synchronizedMap(WeakHashMap<Surface, Int>())
-    private val hookedListenerClasses = Collections.newSetFromSetFromMap(WeakHashMap<Class<*>, Boolean>())
+    private val hookedListenerClasses = java.util.Collections.newSetFromMap(java.util.WeakHashMap<Class<*>, Boolean>())
 
     /**
      * Initialize all camera hooks
