@@ -181,10 +181,12 @@ class TextureRenderer(private val isVideo: Boolean = true) {
                 scaleY = 1f
             }
             
-            // Smart Mirroring: If rotated 90/270 (sideways buffer), flip Y-axis to fix X-inversion.
-            // If straight 0/180, flip X-axis.
-            val flipX = isMirrored && (rotationDegrees == 0 || rotationDegrees == 180)
-            val flipY = isMirrored && (rotationDegrees == 90 || rotationDegrees == 270)
+            // Dynamic Smart Mirroring:
+            // 1. We only mirror capture sessions (rotationDegrees != 0) to avoid touching the preview.
+            // 2. We detect if the final view is Portrait or Landscape to flip the correct physical axis.
+            val viewIsPortrait = viewHeight > viewWidth
+            val flipX = isMirrored && (rotationDegrees != 0 && !viewIsPortrait) // Landscape: X is horizontal
+            val flipY = isMirrored && (rotationDegrees != 0 && viewIsPortrait)  // Portrait: Y is horizontal
             
             Matrix.scaleM(mvpMatrix, 0, if (flipX) -scaleX else scaleX, if (flipY) -scaleY else scaleY, 1f)
             
