@@ -409,7 +409,7 @@ object CameraHook {
                         ImageFormat.YUV_420_888, ImageFormat.YV12, 35 -> {
                             // YUV Data Override path
                             if (bridge != null && !bridge.hasImageWriter) {
-                                bridge.overwriteImageWithLatestYuv(image)
+                                bridge.overwriteImageWithLatestYuv(image, image.timestamp)
                                 Log.d(TAG, "VirtuCam_Hook: Overwrote YUV image ${image.width}x${image.height}")
                             }
                         }
@@ -430,7 +430,7 @@ object CameraHook {
                         else -> {
                             // Unknown format - try YUV overwrite as a best-effort
                             if (bridge != null && !bridge.hasImageWriter && image.planes.size >= 3) {
-                                bridge.overwriteImageWithLatestYuv(image)
+                                bridge.overwriteImageWithLatestYuv(image, image.timestamp)
                             }
                         }
                     }
