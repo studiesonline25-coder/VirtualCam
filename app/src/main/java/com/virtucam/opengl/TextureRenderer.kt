@@ -205,6 +205,16 @@ class TextureRenderer(private val isVideo: Boolean = true) {
         GLES20.glUseProgram(0)
     }
 
+    /**
+     * Upload a Bitmap to the 2D texture (for Static Image Mode)
+     */
+    fun loadBitmap(bitmap: android.graphics.Bitmap) {
+        if (isVideo) return
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureId)
+        android.opengl.GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bitmap, 0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0)
+    }
+
     fun release() {
         if (program != 0) {
             GLES20.glDeleteProgram(program)

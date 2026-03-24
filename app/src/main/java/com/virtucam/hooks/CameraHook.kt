@@ -756,20 +756,21 @@ object CameraHook {
         var sensorOrientation = 0
         try {
             val cameraManager = context.getSystemService(android.content.Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
-            val characteristics = cameraManager.getCameraCharacteristics(lastOpenedCameraId ?: "0")
+            val characteristics = cameraManager.getCameraCharacteristics("0")
             sensorOrientation = characteristics.get(android.hardware.camera2.CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
         } catch (e: Exception) {
-            Log.e(TAG, "VirtuCam_Hook: Failed to read SENSOR_ORIENTATION for Camera \${lastOpenedCameraId}", e)
+            Log.e(TAG, "VirtuCam_Hook: Failed to read SENSOR_ORIENTATION", e)
         }
         
-        for (surface in targetSurfaces) {
+        if (targetSurfaces.isNotEmpty()) {
             try {
-                val thread = VirtualRenderThread(surface, context, isVideo, isStream, streamUrl, sensorOrientation)
+                // [Sync Fix] Start ONE master thread for ALL surfaces to ensure sync and save CPU
+                val thread = VirtualRenderThread(targetSurfaces, context, isVideo, isStream, streamUrl, sensorOrientation)
                 thread.start()
                 renderThreads.add(thread)
-                Log.d(TAG, "VirtuCam_Hook: Started RenderThread for surface.")
+                Log.d(TAG, "VirtuCam_Hook: Started MASTER RenderThread for ${targetSurfaces.size} surfaces.")
             } catch (t: Throwable) {
-                Log.e(TAG, "VirtuCam_Hook: Failed to start RenderThread", t)
+                Log.e(TAG, "VirtuCam_Hook: Failed to start master RenderThread", t)
             }
         }
     }
@@ -814,10 +815,10 @@ object CameraHook {
 }
 
 /**
- * Dedicated thread targeting the hijacked surface via EGL
+ * Dedicated thread targeting the hijacked surfaces via EGL
  */
 class VirtualRenderThread(
-    private val targetSurface: Surface,
+    private val targetSurfaces: List<Surface>,
     private val context: android.content.Context,
     private val isVideo: Boolean,
     private val isStream: Boolean,
@@ -829,7 +830,7 @@ class VirtualRenderThread(
     private var isRunning = true
     
     private var eglCore: EglCore? = null
-    private var eglSurface: android.opengl.EGLSurface? = null
+    private val eglSurfaces = mutableListOf<android.opengl.EGLSurface>()
     private var textureRenderer: TextureRenderer? = null
     
     private var videoPlayer: VideoPlayer? = null
@@ -850,8 +851,24 @@ class VirtualRenderThread(
     override fun run() {
         try {
             eglCore = EglCore()
-            eglSurface = eglCore!!.createWindowSurface(targetSurface)
-            eglCore!!.makeCurrent(eglSurface!!)
+            
+            // Create EGL surfaces for ALL targets
+            for (surface in targetSurfaces) {
+                try {
+                    val es = eglCore!!.createWindowSurface(surface)
+                    eglSurfaces.add(es)
+                } catch (e: Exception) {
+                    Log.e("VirtuCam_Render", "Failed to create EGL surface for target", e)
+                }
+            }
+            
+            if (eglSurfaces.isEmpty()) {
+                Log.e("VirtuCam_Render", "No valid target surfaces. Exiting.")
+                return
+            }
+
+            // Make the first one current for init
+            eglCore!!.makeCurrent(eglSurfaces[0])
             
             textureRenderer = TextureRenderer(isVideo)
             textureRenderer!!.init()
@@ -862,40 +879,13 @@ class VirtualRenderThread(
                 // Live Stream Pipeline (ExoPlayer)
                 mediaSurfaceTexture = SurfaceTexture(textureRenderer!!.textureId)
                 mediaSurface = Surface(mediaSurfaceTexture)
-                
                 val hasNewFrame = java.util.concurrent.atomic.AtomicBoolean(false)
-                mediaSurfaceTexture?.setOnFrameAvailableListener {
-                    hasNewFrame.set(true)
-                }
+                mediaSurfaceTexture?.setOnFrameAvailableListener { hasNewFrame.set(true) }
                 
                 streamPlayer = StreamPlayer(context, streamUrl, mediaSurface!!) {}
                 streamPlayer!!.start()
                 
-                var frameCount = 0
-                val matrix = FloatArray(16)
-                while (isRunning) {
-                    frameCount++
-                    if (frameCount % 60 == 0) {
-                        CameraHook.loadConfiguration()
-                    }
-                    
-                    val viewWidth = eglCore!!.querySurface(eglSurface!!, android.opengl.EGL14.EGL_WIDTH)
-                    val viewHeight = eglCore!!.querySurface(eglSurface!!, android.opengl.EGL14.EGL_HEIGHT)
-                    
-                    if (hasNewFrame.compareAndSet(true, false)) {
-                        try {
-                            mediaSurfaceTexture?.updateTexImage()
-                        } catch (e: Exception) {}
-                    }
-                    mediaSurfaceTexture?.getTransformMatrix(matrix)
-                    textureRenderer?.draw(matrix, streamPlayer!!.videoWidth, streamPlayer!!.videoHeight, viewWidth, viewHeight, getTargetRatio(viewWidth, viewHeight))
-                    if (eglCore?.swapBuffers(eglSurface!!) == false) {
-                        Log.w("VirtuCam_Render", "Target surface abandoned during stream. Stopping thread.")
-                        quit()
-                        break
-                    }
-                    sleep(33)
-                }
+                renderLoop(hasNewFrame) { streamPlayer!!.videoWidth to streamPlayer!!.videoHeight }
                 streamPlayer!!.stop()
                 
             } else if (isVideo) {
@@ -906,40 +896,13 @@ class VirtualRenderThread(
                 val pfd = context.contentResolver.openFileDescriptor(uri, "r")
                 if (pfd != null) {
                     val fd = pfd.fileDescriptor
-                    
                     val hasNewFrame = java.util.concurrent.atomic.AtomicBoolean(false)
-                    mediaSurfaceTexture?.setOnFrameAvailableListener {
-                        hasNewFrame.set(true)
-                    }
+                    mediaSurfaceTexture?.setOnFrameAvailableListener { hasNewFrame.set(true) }
                     
                     videoPlayer = VideoPlayer(fd, mediaSurface!!) {}
                     videoPlayer!!.start()
                     
-                    var frameCount = 0
-                    val matrix = FloatArray(16)
-                    while (isRunning) {
-                        frameCount++
-                        if (frameCount % 60 == 0) {
-                            CameraHook.loadConfiguration()
-                        }
-                        
-                        val viewWidth = eglCore!!.querySurface(eglSurface!!, android.opengl.EGL14.EGL_WIDTH)
-                        val viewHeight = eglCore!!.querySurface(eglSurface!!, android.opengl.EGL14.EGL_HEIGHT)
-                        
-                        if (hasNewFrame.compareAndSet(true, false)) {
-                            try {
-                                mediaSurfaceTexture?.updateTexImage()
-                            } catch (e: Exception) {}
-                        }
-                        mediaSurfaceTexture?.getTransformMatrix(matrix)
-                        textureRenderer?.draw(matrix, videoPlayer!!.videoWidth, videoPlayer!!.videoHeight, viewWidth, viewHeight, getTargetRatio(viewWidth, viewHeight))
-                        if (eglCore?.swapBuffers(eglSurface!!) == false) {
-                            Log.w("VirtuCam_Render", "Target surface abandoned during video. Stopping thread.")
-                            quit()
-                            break
-                        }
-                        sleep(33)
-                    }
+                    renderLoop(hasNewFrame) { videoPlayer!!.videoWidth to videoPlayer!!.videoHeight }
                     
                     videoPlayer!!.stop()
                     pfd.close()
@@ -951,45 +914,82 @@ class VirtualRenderThread(
                 stream?.close()
                 
                 if (bitmap != null) {
+                    textureRenderer!!.loadBitmap(bitmap)
                     val staticImageW = bitmap.width
                     val staticImageH = bitmap.height
-                    
-                    GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureRenderer!!.textureId)
-                    GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bitmap, 0)
                     bitmap.recycle()
                     
-                    var frameCount = 0
                     val matrix = FloatArray(16)
                     Matrix.setIdentityM(matrix, 0)
                     
                     while (isRunning) {
-                        frameCount++
-                        if (frameCount % 60 == 0) {
-                            CameraHook.loadConfiguration()
-                        }
-                        
-                        val viewWidth = eglCore!!.querySurface(eglSurface!!, android.opengl.EGL14.EGL_WIDTH)
-                        val viewHeight = eglCore!!.querySurface(eglSurface!!, android.opengl.EGL14.EGL_HEIGHT)
-                        textureRenderer?.draw(matrix, staticImageW, staticImageH, viewWidth, viewHeight, getTargetRatio(viewWidth, viewHeight))
-                        if (eglCore?.swapBuffers(eglSurface!!) == false) {
-                            Log.w("VirtuCam_Render", "Target surface abandoned. Stopping Static Image thread.")
-                            quit()
-                        }
+                        if (!drawToAllSurfaces(matrix, staticImageW, staticImageH)) break
                         sleep(33) // ~30 fps simulated heartbeat
                     }
                 }
             }
         } catch (t: Throwable) {
-            Log.e("VirtuCam_Render", "Render thread error", t)
+            Log.e("VirtuCam_Render", "Master Render thread error", t)
         } finally {
-            mediaSurface?.release()
-            mediaSurfaceTexture?.release()
-            textureRenderer?.release()
-            if (eglSurface != null && eglCore != null) {
-                eglCore!!.releaseSurface(eglSurface!!)
-            }
-            eglCore?.release()
+            releaseResources()
         }
+    }
+
+    private fun renderLoop(hasNewFrame: java.util.concurrent.atomic.AtomicBoolean, sizeProvider: () -> Pair<Int, Int>) {
+        var frameCount = 0
+        val matrix = FloatArray(16)
+        while (isRunning) {
+            frameCount++
+            if (frameCount % 60 == 0) CameraHook.loadConfiguration()
+            
+            if (hasNewFrame.compareAndSet(true, false)) {
+                try { mediaSurfaceTexture?.updateTexImage() } catch (_: Exception) {}
+            }
+            mediaSurfaceTexture?.getTransformMatrix(matrix)
+            
+            val (vw, vh) = sizeProvider()
+            if (!drawToAllSurfaces(matrix, vw, vh)) break
+            
+            sleep(30)
+        }
+    }
+
+    private fun drawToAllSurfaces(matrix: FloatArray, contentW: Int, contentH: Int): Boolean {
+        val it = eglSurfaces.iterator()
+        while (it.hasNext()) {
+            val es = it.next()
+            try {
+                eglCore!!.makeCurrent(es)
+                val vw = eglCore!!.querySurface(es, android.opengl.EGL14.EGL_WIDTH)
+                val vh = eglCore!!.querySurface(es, android.opengl.EGL14.EGL_HEIGHT)
+                
+                textureRenderer?.draw(matrix, contentW, contentH, vw, vh, getTargetRatio(vw, vh))
+                
+                if (eglCore?.swapBuffers(es) == false) {
+                    Log.w("VirtuCam_Render", "Surface abandoned, removing.")
+                    it.remove()
+                }
+            } catch (e: Exception) {
+                it.remove()
+            }
+        }
+        return eglSurfaces.isNotEmpty()
+    }
+
+    private fun releaseResources() {
+        isRunning = false
+        videoPlayer?.stop()
+        streamPlayer?.stop()
+        mediaSurface?.release()
+        mediaSurfaceTexture?.release()
+        
+        eglSurfaces.forEach { 
+            try { eglCore?.releaseSurface(it) } catch (_: Exception) {}
+        }
+        eglSurfaces.clear()
+        
+        textureRenderer?.release()
+        eglCore?.release()
     }
     
     fun quit() {
