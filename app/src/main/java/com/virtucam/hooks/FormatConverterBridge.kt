@@ -102,9 +102,15 @@ class FormatConverterBridge(
         }
     }
 
-    // Reusable buffers for performance
-    private var yRowBytes: ByteArray? = null
-    private var uvRowBytes: ByteArray? = null
+    private fun checkDataIntegrity(data: ByteArray?): Boolean {
+        if (data == null) return false
+        // Quick check: if the first 1KB is all zeros, the buffer is likely stale/black/green
+        val checkSize = 1024.coerceAtMost(data.size)
+        for (i in 0 until checkSize) {
+            if (data[i] != 0.toByte()) return true
+        }
+        return false
+    }
 
     /**
      * Synchronously overwrites the target image with our RGBA data converted to YUV.
@@ -116,7 +122,11 @@ class FormatConverterBridge(
      * Strict NV21 (V before U) layout for 2-plane semi-planar buffers.
      */
     fun overwriteImageWithLatestYuv(targetImage: Image, timestamp: Long) {
-        val rgbaBytes = cachedRgbaData ?: return
+        val rgbaBytes = cachedRgbaData
+        if (rgbaBytes == null || !checkDataIntegrity(rgbaBytes)) {
+            Log.e(TAG, "FormatConverterBridge: Cannot overwrite YUV - source data is missing or blank (all zeros)!")
+            return
+        }
         
         try {
             val w = targetImage.width
@@ -254,7 +264,11 @@ class FormatConverterBridge(
      * Overwrite a JPEG-format Image buffer with our spoofed content.
      */
     fun overwriteImageWithLatestJpeg(targetImage: Image) {
-        val rgbaBytes = cachedRgbaData ?: return
+        val rgbaBytes = cachedRgbaData
+        if (rgbaBytes == null || !checkDataIntegrity(rgbaBytes)) {
+            Log.e(TAG, "FormatConverterBridge: Cannot overwrite JPEG - source data is missing or blank (all zeros)!")
+            return
+        }
         
         val planes = targetImage.planes
         if (planes.isEmpty()) return

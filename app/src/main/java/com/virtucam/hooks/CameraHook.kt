@@ -266,15 +266,19 @@ object CameraHook {
                         if (!isEnabled) return
                         val builder = param.thisObject ?: return
                         
-                        // [Redmi 14C Fix] Only apply Xiaomi Capture Bypass to STILL_CAPTURE templates (2)
-                        // This prevents breaking the PREVIEW stream which causes a 'black screen'.
+                        // [Redmi 14C Fix] Apply Xiaomi Capture Bypass to STILL_CAPTURE (2) and ZSL (5) templates.
+                        // Xiaomi's Parallel Engine (MiAlgo/MIVI) often uses Zero Shutter Lag (ZSL) streams.
                         val template = try { XposedHelpers.getIntField(builder, "mTemplate") } catch (e: Exception) { -1 }
-                        if (template != 2) return // 1=Preview, 2=StillCapture, 3=Record
                         
                         // Disable Xiaomi Parallel / MiAlgo / MIVI processing (forces 'Simple' capture path)
+                        // Applying to ALL templates on Xiaomi is safer to prevent engine initialization.
                         setXiaomiVendorTag(builder, "xiaomi.parallel.enabled", 0.toByte())
                         setXiaomiVendorTag(builder, "xiaomi.mivi.enabled", false)
                         setXiaomiVendorTag(builder, "xiaomi.algoengine.enabled", 0.toByte())
+                        
+                        if (template != 2 && template != 5) return // 1=Preview, 2=StillCapture, 5=ZSL
+                        
+                        Log.d(TAG, "XiaomiBypass: Applying extra suppression to template $template")
                         
                         // Disable multi-frame and post-processing dependencies
                         setXiaomiVendorTag(builder, "xiaomi.mfnr.enabled", 0.toByte())
@@ -282,7 +286,11 @@ object CameraHook {
                         setXiaomiVendorTag(builder, "xiaomi.multiframe.inputNum", 1)
                         setXiaomiVendorTag(builder, "xiaomi.snapshot.optimize.enabled", 0.toByte())
                         
-                        // Device-dependent tags; setXiaomiVendorTag will gracefully ignore if unsupported.
+                        // Newer MIVI specific suppressions
+                        setXiaomiVendorTag(builder, "xiaomi.mivi.super.pixel.enabled", false)
+                        setXiaomiVendorTag(builder, "xiaomi.mivi.super.night.enabled", false)
+                        
+                        // Device-dependent tags
                         setXiaomiVendorTag(builder, "xiaomi.capturepipeline.simple", 1.toByte())
                         setXiaomiVendorTag(builder, "xiaomi.sat.enabled", 0.toByte())
                         
@@ -316,9 +324,9 @@ object CameraHook {
             XposedHelpers.callMethod(builder, "set", key, value)
             
             // Helpful logging to verify which tags were accepted by the HAL
-            // Log.v(TAG, "XiaomiBypass: Set $name success")
+            Log.v(TAG, "XiaomiBypass: Set $name success")
         } catch (_: Throwable) {
-            // Log.v(TAG, "XiaomiBypass: Tag $name not supported on this device")
+            Log.v(TAG, "XiaomiBypass: Tag $name not supported on this device")
         }
     }
 
@@ -682,6 +690,7 @@ object CameraHook {
             Log.e(TAG, "DIAGNOSTIC_VIRTUCAM: Creating FormatConverterBridge for $w x $h (Format $format)")
             val b = FormatConverterBridge(w, h, targetSurface, format)
             activeBridges.add(b)
+            formatBridges[android.util.Size(w, h)] = b
             b
         } else {
             null
@@ -791,6 +800,7 @@ object CameraHook {
                                 val bridge = if (!isPreview) {
                                     val b = FormatConverterBridge(w, h, targetSurface, format)
                                     activeBridges.add(b)
+                                    formatBridges[android.util.Size(w, h)] = b
                                     targetSurfaces.add(Pair(b.inputSurface ?: targetSurface, isCapture))
                                     b
                                 } else {
@@ -941,6 +951,7 @@ object CameraHook {
         } catch (_: Throwable) {}
         
         surfaceMap.clear()
+        formatBridges.clear()
     }
 
     private fun startRenderThreads(targetSurfaces: List<Pair<Surface, Boolean>>) {
