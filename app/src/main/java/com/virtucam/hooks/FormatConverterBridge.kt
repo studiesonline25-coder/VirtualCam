@@ -107,76 +107,109 @@ class FormatConverterBridge(
      * Synchronously overwrites the physically-allocated target buffer with our cached YUV computations.
      * This avoids ImageWriter usage flags rejections natively.
      */
+    /**
+     * Synchronously overwrites the physically-allocated target buffer with our cached YUV computations.
+     * This version supports 2-plane YUV (NV12/NV21) common on Xiaomi and performs hardware-offset rotation.
+     */
     fun overwriteImageWithLatestYuv(targetImage: Image) {
         val rgbaBytes = cachedRgbaData ?: return
         
         val targetPlanes = targetImage.planes
-        if (targetPlanes.size < 3) {
-            Log.e(TAG, "DIAGNOSTIC_VIRTUCAM: Target YUV image lacks 3 planes!")
+        if (targetPlanes.size < 2) {
+            Log.e(TAG, "DIAGNOSTIC_VIRTUCAM: Target YUV image has too few planes (${targetPlanes.size})")
             return
         }
         
         val tW = targetImage.width
         val tH = targetImage.height
-        Log.e(TAG, "DIAGNOSTIC_VIRTUCAM: Overwriting YUV: Target=${tW}x${tH}, Bridge=${width}x${height}")
+        Log.e(TAG, "DIAGNOSTIC_VIRTUCAM: Overwriting YUV: Target=${tW}x${tH}, Bridge=${width}x${height}, Planes=${targetPlanes.size}")
 
+        // Detect rotation by comparing dimensions. 
+        // If target WxH is Sideways relative to bridge width/height, we must rotate.
+        val rotationNeeded = if (tW == height && tH == width) 90 else 0
+        
         val yBuffer = targetPlanes[0].buffer
-        val uBuffer = targetPlanes[1].buffer
-        val vBuffer = targetPlanes[2].buffer
-        
         val yRowStride = targetPlanes[0].rowStride
-        val uRowStride = targetPlanes[1].rowStride
-        val vRowStride = targetPlanes[2].rowStride
-        val uvPixelStride = targetPlanes[1].pixelStride
         
-        val rgbaRowStride = width * 4 // RGBA_8888 tightly packed from our ImageReader cache
+        // Handle 2-plane (interleaved) or 3-plane (planar) UV
+        val uPlane = targetPlanes[1]
+        val vPlane = if (targetPlanes.size > 2) targetPlanes[2] else null
+        
+        val uBuffer = uPlane.buffer
+        val vBuffer = vPlane?.buffer ?: uBuffer // For 2-plane, V is in the same buffer as U
+        
+        val uRowStride = uPlane.rowStride
+        val vRowStride = vPlane?.rowStride ?: uRowStride
+        
+        val uPixelStride = uPlane.pixelStride
+        val vPixelStride = vPlane?.pixelStride ?: uPixelStride
+        
+        // Offset for V in NV12 (U-then-V) or NV21 (V-then-U)
+        // Usually, in 2-plane format, if uBuffer.position is 0, vBuffer.position is 1 or vice-versa.
+        // We check the relative address if possible, but safe guess is pixelStride=2 means interleaved.
+        val isInterleaved = (uPixelStride == 2)
+        val vOffsetInU = if (isInterleaved && vPlane == null) 1 else 0 // Common for NV12
         
         if (yRowBytes == null || yRowBytes!!.size < yRowStride) {
             yRowBytes = ByteArray(yRowStride)
         }
-        val yRow = yRowBytes!!
+        val yRowArr = yRowBytes!!
         
-        yBuffer.position(0)
-        
-        for (row in 0 until height) {
-            // OpenGL source image is bottom-to-top, but YUV buffers are top-to-bottom.
-            // We invert the row index here to fix the vertical flip.
-            var rgbaOffset = (height - 1 - row) * rgbaRowStride
-            if (rgbaOffset < 0 || rgbaOffset + width * 4 > rgbaBytes.size) break
-            
+        // RGBA source is tightly packed (width * 4)
+        val srcStride = width * 4
+
+        for (row in 0 until tH) {
             val isEvenRow = (row % 2 == 0)
-            var uIndex = (row / 2) * uRowStride
-            var vIndex = (row / 2) * vRowStride
+            var yIdx = 0
             
-            var yIndex = 0
-            for (col in 0 until width) {
+            for (col in 0 until tW) {
+                // Map target (row, col) to source (srcRow, srcCol) based on rotation
+                // If rot=90 CCW: srcRow = col, srcCol = (bridgeH - 1 - row)
+                val srcRow: Int
+                val srcCol: Int
+                if (rotationNeeded == 90) {
+                    srcRow = col
+                    srcCol = height - 1 - row
+                } else {
+                    // Standard Vertical Flip (OpenGL is bottom-to-top)
+                    srcRow = height - 1 - row
+                    srcCol = col
+                }
+                
+                val rgbaOffset = (srcRow * srcStride) + (srcCol * 4)
+                if (rgbaOffset < 0 || rgbaOffset + 3 >= rgbaBytes.size) {
+                    yRowArr[yIdx++] = 16 // Black padding
+                    continue
+                }
+                
                 val r = rgbaBytes[rgbaOffset].toInt() and 0xFF
                 val g = rgbaBytes[rgbaOffset + 1].toInt() and 0xFF
                 val b = rgbaBytes[rgbaOffset + 2].toInt() and 0xFF
                 
-                // integer math approximation (shifts and adds)
+                // RGB to YUV BT.601
                 val y = ((66 * r + 129 * g + 25 * b + 128) shr 8) + 16
-                yRow[yIndex++] = y.coerceIn(16, 235).toByte()
+                yRowArr[yIdx++] = y.coerceIn(16, 235).toByte()
                 
                 if (isEvenRow && (col % 2 == 0)) {
                     val u = ((-38 * r - 74 * g + 112 * b + 128) shr 8) + 128
                     val v = ((112 * r - 94 * g - 18 * b + 128) shr 8) + 128
                     
-                    if (uIndex < uBuffer.capacity()) uBuffer.put(uIndex, u.coerceIn(16, 240).toByte())
-                    if (vIndex < vBuffer.capacity()) vBuffer.put(vIndex, v.coerceIn(16, 240).toByte())
+                    val uvRow = row / 2
+                    val uvCol = col / 2
                     
-                    uIndex += uvPixelStride
-                    vIndex += uvPixelStride
+                    val uIdx = (uvRow * uRowStride) + (uvCol * uPixelStride)
+                    val vIdx = (uvRow * vRowStride) + (uvCol * vPixelStride) + vOffsetInU
+                    
+                    if (uIdx < uBuffer.capacity()) uBuffer.put(uIdx, u.coerceIn(16, 240).toByte())
+                    if (vIdx < vBuffer.capacity()) vBuffer.put(vIdx, v.coerceIn(16, 240).toByte())
                 }
-                
-                rgbaOffset += 4
             }
             
-            // Fast bulk copy of the heavy Y-plane row by row
+            // Bulk copy Y row
             val pos = row * yRowStride
             if (pos < yBuffer.capacity()) {
                 yBuffer.position(pos)
-                yBuffer.put(yRow, 0, yIndex.coerceAtMost(yBuffer.remaining()))
+                yBuffer.put(yRowArr, 0, yIdx.coerceAtMost(yBuffer.remaining()))
             }
         }
     }
