@@ -110,6 +110,11 @@ class FormatConverterBridge(
      * Synchronously overwrites the target image with our RGBA data converted to YUV.
      * Uses absolute indexing for maximum robustness against stride and interleave variations.
      */
+    /**
+     * Synchronously overwrites the target image with our RGBA data converted to YUV.
+     * Engineered for Xiaomi MiAlgoEngine (Parallel Service) compatibility.
+     * Strict NV21 (V before U) layout for 2-plane semi-planar buffers.
+     */
     fun overwriteImageWithLatestYuv(targetImage: Image, timestamp: Long) {
         val rgbaBytes = cachedRgbaData ?: return
         
@@ -122,22 +127,17 @@ class FormatConverterBridge(
             // Detect rotation: Source is always width x height. 
             val rotation = if (w == height && h == width) 90 else 0
 
-            // Standard YUV_420_888: Plane 0=Y, 1=U, 2=V
-            // YV12 (842094169): Plane 0=Y, 1=V, 2=U
-            val isYV12 = (format == 842094169)
+            // Y Plane (Plane 0)
             val yPlane = planes[0]
-            val uPlane = if (isYV12) (if (planes.size > 2) planes[2] else null) else (if (planes.size > 1) planes[1] else null)
-            val vPlane = if (isYV12) (if (planes.size > 1) planes[1] else null) else (if (planes.size > 2) planes[2] else null)
-
-            val srcW = width
-            val srcH = height
-            val srcStrideArr = srcW * 4
-
-            // Process Y Plane
             val yBuffer = yPlane.buffer
             val yRowStride = yPlane.rowStride
             val yPixStride = yPlane.pixelStride
             
+            val srcW = width
+            val srcH = height
+            val srcStrideArr = srcW * 4
+
+            // 1. Process Y Plane
             for (row in 0 until h) {
                 val rowPos = row * yRowStride
                 for (col in 0 until w) {
@@ -158,12 +158,19 @@ class FormatConverterBridge(
                 }
             }
 
-            // Process Chroma Planes (Independent write for each byte handles all layouts)
-            fun writeChroma(plane: Image.Plane?, isU: Boolean) {
-                if (plane == null) return
-                val buffer = plane.buffer
-                val pStride = plane.rowStride
-                val pixStride = plane.pixelStride
+            // 2. Process Chroma Planes (U/V)
+            // Xiaomi NativeTool expects NV21 (0x11) where V precedes U in memory
+            val isYV12 = (format == 842094169)
+            val isNv21 = (format == 0x11)
+            val isSemiPlanar = (planes.size == 2)
+
+            if (isSemiPlanar) {
+                // [XIAOMI FIX] 2-plane semi-planar layout
+                val uvPlane = planes[1]
+                val uvBuffer = uvPlane.buffer
+                val pStride = uvPlane.rowStride
+                val pixStride = uvPlane.pixelStride // Should be 2
+                
                 val tW = w / 2
                 val tH = h / 2
                 
@@ -179,23 +186,63 @@ class FormatConverterBridge(
                             val g = rgbaBytes[rgbaOff+1].toInt() and 0xFF
                             val b = rgbaBytes[rgbaOff+2].toInt() and 0xFF
                             
-                            val chroma = if (isU) {
-                                ((-38 * r - 74 * g + 112 * b + 128) shr 8) + 128
-                            } else {
-                                ((112 * r - 94 * g - 18 * b + 128) shr 8) + 128
-                            }
+                            val u = ((-38 * r - 74 * g + 112 * b + 128) shr 8) + 128
+                            val v = ((112 * r - 94 * g - 18 * b + 128) shr 8) + 128
+                            
+                            // NV21 layout: V is at 0, U is at 1
+                            // NV12 layout: U is at 0, V is at 1
+                            val firstByte = if (isNv21) v else u
+                            val secondByte = if (isNv21) u else v
                             
                             val pos = rowPos + (col * pixStride)
-                            if (pos < buffer.capacity()) {
-                                buffer.put(pos, chroma.coerceIn(16, 240).toByte())
+                            if (pos + 1 < uvBuffer.capacity()) {
+                                uvBuffer.put(pos, firstByte.coerceIn(16, 240).toByte())
+                                uvBuffer.put(pos + 1, secondByte.coerceIn(16, 240).toByte())
                             }
                         }
                     }
                 }
-            }
+            } else {
+                // Standard 3-plane or fallback
+                val uPlane = if (isYV12) (if (planes.size > 2) planes[2] else null) else (if (planes.size > 1) planes[1] else null)
+                val vPlane = if (isYV12) (if (planes.size > 1) planes[1] else null) else (if (planes.size > 2) planes[2] else null)
 
-            writeChroma(uPlane, true)
-            writeChroma(vPlane, false)
+                fun writeChroma(plane: Image.Plane?, isU: Boolean) {
+                    if (plane == null) return
+                    val buffer = plane.buffer
+                    val pStride = plane.rowStride
+                    val pixStride = plane.pixelStride
+                    val tW = w / 2
+                    val tH = h / 2
+                    
+                    for (row in 0 until tH) {
+                        val rowPos = row * pStride
+                        for (col in 0 until tW) {
+                            val srcRowForUV = (if (rotation == 90) col else row) * 2
+                            val srcColForUV = (if (rotation == 90) (tH - 1 - row) else col) * 2
+                            
+                            val rgbaOff = (srcRowForUV * srcStrideArr) + (srcColForUV * 4)
+                            if (rgbaOff >= 0 && rgbaOff + 3 < rgbaBytes.size) {
+                                val r = rgbaBytes[rgbaOff].toInt() and 0xFF
+                                val g = rgbaBytes[rgbaOff+1].toInt() and 0xFF
+                                val b = rgbaBytes[rgbaOff+2].toInt() and 0xFF
+                                
+                                val chroma = if (isU) {
+                                    ((-38 * r - 74 * g + 112 * b + 128) shr 8) + 128
+                                } else {
+                                    ((112 * r - 94 * g - 18 * b + 128) shr 8) + 128
+                                }
+                                
+                                val pos = rowPos + (col * pixStride)
+                                if (pos < buffer.capacity()) {
+                                    buffer.put(pos, chroma.coerceIn(16, 240).toByte())
+                                }
+                            }
+                        }
+                    }
+                }
+                writeChroma(uPlane, true)
+            }
             
             Log.d(TAG, "FormatConverterBridge: Captured frame (${w}x${h}) rewritten successfully. Format=$format")
         } catch (e: Exception) {

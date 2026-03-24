@@ -89,6 +89,7 @@ object CameraHook {
             hookCameraDeviceOutputConfigurations(lpparam)
             hookCamera1(lpparam)
             hookCaptureCallback(lpparam)
+            hookXiaomiBypass(lpparam)
             
             Log.d(TAG, "VirtuCam_Hook: All hooks deployed successfully.")
         } catch (t: Throwable) {
@@ -245,6 +246,51 @@ object CameraHook {
                 }
             }
         })
+    }
+
+    /**
+     * [Xiaomi Parallel Bypass] Force legacy synchronous capture path by disabling 
+     * proprietary background processing features that reject virtual buffers.
+     */
+    private fun hookXiaomiBypass(lpparam: XC_LoadPackage.LoadPackageParam) {
+        if (!android.os.Build.MANUFACTURER.equals("Xiaomi", ignoreCase = true)) return
+
+        try {
+            val builderClass = XposedHelpers.findClassIfExists(
+                "android.hardware.camera2.CaptureRequest\$Builder", lpparam.classLoader
+            ) ?: return
+
+            XposedBridge.hookAllMethods(builderClass, "build", object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam) {
+                    try {
+                        if (!isEnabled) return
+                        val builder = param.thisObject as? android.hardware.camera2.CaptureRequest.Builder<*> ?: return
+                        
+                        // Disable Xiaomi Parallel / MiAlgo processing (forces 'Simple' capture path)
+                        setXiaomiVendorTag(builder, "xiaomi.parallel.enabled", 0.toByte())
+                        setXiaomiVendorTag(builder, "xiaomi.mfnr.enabled", 0.toByte())
+                        setXiaomiVendorTag(builder, "xiaomi.hdr.enabled", 0.toByte())
+                        setXiaomiVendorTag(builder, "xiaomi.multiframe.inputNum", 1)
+                        setXiaomiVendorTag(builder, "xiaomi.capturepipeline.simple", 1.toByte())
+                        
+                        // Disable SAT (Smooth Transition) which requires multi-stream parallel zipping
+                        setXiaomiVendorTag(builder, "xiaomi.sat.enabled", 0.toByte())
+                    } catch (_: Exception) {}
+                }
+            })
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to hook Xiaomi Capture Pipeline bypass", e)
+        }
+    }
+
+    private fun setXiaomiVendorTag(builder: android.hardware.camera2.CaptureRequest.Builder<*>, name: String, value: Any) {
+        try {
+            // Xiaomi uses reflection to create keys for hidden vendor tags
+            val keyConstructor = android.hardware.camera2.CaptureRequest.Key::class.java.getDeclaredConstructor(String::class.java, Class::class.java)
+            keyConstructor.isAccessible = true
+            val key = keyConstructor.newInstance(name, value::class.java) as android.hardware.camera2.CaptureRequest.Key<Any>
+            builder.set(key, value)
+        } catch (_: Exception) {}
     }
 
     /**
