@@ -939,7 +939,7 @@ class VirtualRenderThread(
                 streamPlayer = StreamPlayer(context, streamUrl, mediaSurface!!) { hasNewFrame.set(true) }
                 streamPlayer!!.start()
                 
-                renderLoop(hasNewFrame) { streamPlayer!!.videoWidth to streamPlayer!!.videoHeight }
+                renderLoop(dummyEs!!, hasNewFrame) { streamPlayer!!.videoWidth to streamPlayer!!.videoHeight }
                 streamPlayer!!.stop()
                 
             } else if (isVideo) {
@@ -950,10 +950,11 @@ class VirtualRenderThread(
                 if (pfd != null) {
                     val fd = pfd.fileDescriptor
                     val hasNewFrame = java.util.concurrent.atomic.AtomicBoolean(false)
+                    
                     videoPlayer = VideoPlayer(fd, mediaSurface!!) { hasNewFrame.set(true) }
                     videoPlayer!!.start()
                     
-                    renderLoop(hasNewFrame) { videoPlayer!!.videoWidth to videoPlayer!!.videoHeight }
+                    renderLoop(dummyEs!!, hasNewFrame) { videoPlayer!!.videoWidth to videoPlayer!!.videoHeight }
                     
                     videoPlayer!!.stop()
                     pfd.close()
@@ -986,13 +987,25 @@ class VirtualRenderThread(
         }
     }
 
-    private fun renderLoop(hasNewFrame: java.util.concurrent.atomic.AtomicBoolean, sizeProvider: () -> Pair<Int, Int>) {
+    private fun renderLoop(dummyEs: android.opengl.EGLSurface, hasNewFrame: java.util.concurrent.atomic.AtomicBoolean, sizeProvider: () -> Pair<Int, Int>) {
         val matrix = FloatArray(16)
+        var frameCount = 0
         while (isRunning) {
             if (System.currentTimeMillis() % 2000 < 30) CameraHook.loadConfiguration()
             
+            // Ensure context is current for updateTexImage
+            eglCore?.makeCurrent(dummyEs)
+            
             if (hasNewFrame.compareAndSet(true, false)) {
-                try { mediaSurfaceTexture?.updateTexImage() } catch (_: Exception) {}
+                try { 
+                    mediaSurfaceTexture?.updateTexImage() 
+                    if (frameCount++ % 60 == 0) {
+                        mediaSurfaceTexture?.getTransformMatrix(matrix)
+                        Log.d("VirtuCam_Render", "UpdateTex: matrix[0]=${matrix[0]}, tex=${textureRenderer?.textureId}")
+                    }
+                } catch (e: Exception) {
+                    Log.e("VirtuCam_Render", "updateTexImage failed", e)
+                }
             }
             mediaSurfaceTexture?.getTransformMatrix(matrix)
             
