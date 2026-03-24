@@ -915,10 +915,27 @@ class VirtualRenderThread(
             // Create EGL surfaces for ALL targets
             for (targetPair in targetSurfaces) {
                 try {
-                    val es = eglCore!!.createWindowSurface(targetPair.first)
-                    eglSurfaceTargets.add(Pair(es, targetPair.second))
+                    val surface = targetPair.first
+                    if (!surface.isValid) continue
+                    
+                    // Add a tiny retry for "already connected" race conditions
+                    var es: android.opengl.EGLSurface? = null
+                    for (i in 0..2) {
+                        try {
+                            es = eglCore!!.createWindowSurface(surface)
+                            if (es != null) break
+                        } catch (e: Exception) {
+                            if (i == 2) throw e
+                            Thread.sleep(50)
+                        }
+                    }
+                    
+                    if (es != null) {
+                        eglSurfaceTargets.add(Pair(es, targetPair.second))
+                        Log.d("VirtuCam_Render", "Created EGL surface for target: ${targetPair.first}")
+                    }
                 } catch (e: Exception) {
-                    Log.e("VirtuCam_Render", "Failed to create EGL surface for target", e)
+                    Log.e("VirtuCam_Render", "Failed to create EGL surface for target (skipping): ${e.message}")
                 }
             }
             

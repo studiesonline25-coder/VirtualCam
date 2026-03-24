@@ -57,28 +57,40 @@ class FormatConverterBridge(
             }
             
             imageReader?.setOnImageAvailableListener({ reader ->
-                val rgbaImage = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
+                val rgbaImage = try { reader.acquireLatestImage() } catch (_: Exception) { null } ?: return@setOnImageAvailableListener
                 try {
                     val planes = rgbaImage.planes
                     if (planes.isNotEmpty()) {
                         val buffer = planes[0].buffer
-                        val remaining = buffer.remaining()
+                        val rowStride = planes[0].rowStride
+                        val pixelStride = planes[0].pixelStride
                         
+                        val expectedSize = width * height * 4
                         var data = cachedRgbaData
-                        if (data == null || data.size != remaining) {
-                            data = ByteArray(remaining)
+                        if (data == null || data.size != expectedSize) {
+                            data = ByteArray(expectedSize)
                             cachedRgbaData = data
                         }
                         
+                        // Copy row-by-row to handle stride correctly
                         buffer.position(0)
-                        buffer.get(data)
+                        if (rowStride == width * 4 && pixelStride == 4) {
+                            // Fast path: no padding
+                            buffer.get(data)
+                        } else {
+                            // Slow path: copy row by row ignoring padding
+                            for (row in 0 until height) {
+                                buffer.position(row * rowStride)
+                                buffer.get(data, row * width * 4, width * 4)
+                            }
+                        }
                     }
                 } catch (e: Throwable) {
-                    Log.e(TAG, "Cache loop error", e)
+                    Log.e(TAG, "Cache loop error: ${e.message}")
                 } finally {
                     try {
                         rgbaImage.close()
-                    } catch (e: Throwable) {}
+                    } catch (e: Exception) {}
                 }
             }, handler)
             Log.d(TAG, "FormatConverterBridge (Cache Mode) started successfully.")
@@ -260,7 +272,7 @@ class FormatConverterBridge(
             jpegBuffer.position(0)
             jpegBuffer.limit(bytesToWrite)
             
-            Log.d(TAG, "FormatConverterBridge: Overwrote JPEG image (${jpegBytes.size} bytes) with mimicked physical rotation")
+            Log.d(TAG, "FormatConverterBridge: Overwrote JPEG image (${jpegBytes.size} bytes) Target=${tW}x${tH}")
     }
 
     /**
