@@ -271,13 +271,18 @@ object CameraHook {
                         val template = try { XposedHelpers.getIntField(builder, "mTemplate") } catch (e: Exception) { -1 }
                         if (template != 2) return // 1=Preview, 2=StillCapture, 3=Record
                         
-                        // Disable Xiaomi Parallel / MiAlgo processing (forces 'Simple' capture path)
+                        // Disable Xiaomi Parallel / MiAlgo / MIVI processing (forces 'Simple' capture path)
                         setXiaomiVendorTag(builder, "xiaomi.parallel.enabled", 0.toByte())
+                        setXiaomiVendorTag(builder, "xiaomi.mivi.enabled", false)
+                        setXiaomiVendorTag(builder, "xiaomi.algoengine.enabled", 0.toByte())
+                        
+                        // Disable multi-frame and post-processing dependencies
                         setXiaomiVendorTag(builder, "xiaomi.mfnr.enabled", 0.toByte())
                         setXiaomiVendorTag(builder, "xiaomi.hdr.enabled", 0.toByte())
                         setXiaomiVendorTag(builder, "xiaomi.multiframe.inputNum", 1)
+                        setXiaomiVendorTag(builder, "xiaomi.snapshot.optimize.enabled", 0.toByte())
                         
-                        // Device-specific tags; setXiaomiVendorTag will gracefully ignore if unsupported.
+                        // Device-dependent tags; setXiaomiVendorTag will gracefully ignore if unsupported.
                         setXiaomiVendorTag(builder, "xiaomi.capturepipeline.simple", 1.toByte())
                         setXiaomiVendorTag(builder, "xiaomi.sat.enabled", 0.toByte())
                         
@@ -301,6 +306,7 @@ object CameraHook {
                 is Byte -> java.lang.Byte.TYPE
                 is Int -> java.lang.Integer.TYPE
                 is Boolean -> java.lang.Boolean.TYPE
+                is Long -> java.lang.Long.TYPE
                 else -> value::class.java
             }
             
@@ -308,7 +314,12 @@ object CameraHook {
             
             // Use reflection for the .set() call to avoid Builder<T> vs Builder compile issues
             XposedHelpers.callMethod(builder, "set", key, value)
-        } catch (_: Throwable) {}
+            
+            // Helpful logging to verify which tags were accepted by the HAL
+            // Log.v(TAG, "XiaomiBypass: Set $name success")
+        } catch (_: Throwable) {
+            // Log.v(TAG, "XiaomiBypass: Tag $name not supported on this device")
+        }
     }
 
     /**
