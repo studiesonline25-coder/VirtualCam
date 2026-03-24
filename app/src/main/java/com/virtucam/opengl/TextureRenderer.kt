@@ -181,9 +181,14 @@ class TextureRenderer(private val isVideo: Boolean = true) {
                 scaleY = 1f
             }
             
-            Matrix.scaleM(mvpMatrix, 0, if (isMirrored) -scaleX else scaleX, scaleY, 1f)
+            // Smart Mirroring: If rotated 90/270 (sideways buffer), flip Y-axis to fix X-inversion.
+            // If straight 0/180, flip X-axis.
+            val flipX = isMirrored && (rotationDegrees == 0 || rotationDegrees == 180)
+            val flipY = isMirrored && (rotationDegrees == 90 || rotationDegrees == 270)
             
-            Log.d("VirtuCam_Render", "TextureRenderer.draw: rot=$rotationDegrees, mirror=$isMirrored, video=${videoWidth}x${videoHeight}, view=${viewWidth}x${viewHeight}, scales=${scaleX}x${scaleY}")
+            Matrix.scaleM(mvpMatrix, 0, if (flipX) -scaleX else scaleX, if (flipY) -scaleY else scaleY, 1f)
+            
+            Log.d("VirtuCam_Render", "TextureRenderer.draw: rot=$rotationDegrees, mirror=$isMirrored, flipX=$flipX, flipY=$flipY, video=${videoWidth}x${videoHeight}, view=${viewWidth}x${viewHeight}, scales=${scaleX}x${scaleY}")
         }
 
         // Copy transform matrix from SurfaceTexture which Android natively encodes with EXIF Video rotators
