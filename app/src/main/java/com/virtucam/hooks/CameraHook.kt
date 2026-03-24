@@ -53,9 +53,13 @@ object CameraHook {
     private val surfaceMap = mutableMapOf<Surface, Surface>()
     private val activeBridges = mutableListOf<FormatConverterBridge>()
     
+    // Global telemetry for surface dimensions
+    private val surfaceSizes = java.util.Collections.synchronizedMap(java.util.WeakHashMap<Surface, Pair<Int, Int>>())
+    private val surfaceTextureSizes = java.util.Collections.synchronizedMap(java.util.WeakHashMap<SurfaceTexture, Pair<Int, Int>>())
+
     // [ONCE AND FOR ALL] Surface tracking and crash prevention structures
     private val surfaceFormats = Collections.synchronizedMap(WeakHashMap<Surface, Int>())
-    private val hookedListenerClasses = Collections.newSetFromMap(WeakHashMap<Class<*>, Boolean>())
+    private val hookedListenerClasses = Collections.newSetFromSetFromMap(WeakHashMap<Class<*>, Boolean>())
 
     /**
      * Initialize all camera hooks
@@ -240,14 +244,56 @@ object CameraHook {
             }
         })
 
-        XposedBridge.hookAllMethods(imageReaderClass, "getSurface", object : XC_MethodHook() {
+        XposedHelpers.findAndHookMethod(imageReaderClass, "getSurface", object : XC_MethodHook() {
             override fun afterHookedMethod(param: MethodHookParam) {
                 val reader = param.thisObject as? ImageReader ?: return
                 val surface = param.result as? Surface ?: return
                 val format = XposedHelpers.callMethod(reader, "getImageFormat") as? Int ?: return
+                val w = XposedHelpers.callMethod(reader, "getWidth") as? Int ?: 0
+                val h = XposedHelpers.callMethod(reader, "getHeight") as? Int ?: 0
+                
                 surfaceFormats[surface] = format
+                if (w > 0 && h > 0) {
+                    surfaceSizes[surface] = Pair(w, h)
+                    Log.d(TAG, "VirtuCam_Hook: Tracked ImageReader surface ${w}x${h} format=$format")
+                }
             }
         })
+
+        // Hook SurfaceTexture for Preview size tracking
+        try {
+            XposedHelpers.findAndHookMethod(
+                "android.graphics.SurfaceTexture",
+                lpparam.classLoader,
+                "setDefaultBufferSize",
+                Int::class.java, Int::class.java,
+                object : XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        val st = param.thisObject as? SurfaceTexture ?: return
+                        val w = param.args[0] as Int
+                        val h = param.args[1] as Int
+                        surfaceTextureSizes[st] = Pair(w, h)
+                    }
+                }
+            )
+
+            // Associate SurfaceTexture with Surface for later lookup
+            XposedHelpers.findAndHookConstructor(
+                "android.view.Surface",
+                lpparam.classLoader,
+                SurfaceTexture::class.java,
+                object : XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        val s = param.thisObject as? Surface ?: return
+                        val st = param.args[0] as? SurfaceTexture ?: return
+                        val size = surfaceTextureSizes[st]
+                        if (size != null) {
+                            surfaceSizes[s] = size
+                        }
+                    }
+                }
+            )
+        } catch (_: Throwable) {}
 
         val overwriteHook = object : XC_MethodHook() {
             override fun afterHookedMethod(param: MethodHookParam) {
@@ -390,11 +436,12 @@ object CameraHook {
      * Extract width/height from an OutputConfiguration via reflection
      */
     private fun getSizeFromOutputConfig(config: Any): Pair<Int, Int> {
+        var altSurface: Surface? = null
         try {
             val getSurfaceMethod = config.javaClass.getMethod("getSurface")
-            val surface = getSurfaceMethod.invoke(config) as? Surface
-            if (surface != null) {
-                // Try to get size from the Surface's internal canvas or native fields
+            altSurface = getSurfaceMethod.invoke(config) as? Surface
+            if (altSurface != null) {
+                // Try to get size from the OutputConfiguration's internal fields (Android 10+)
                 try {
                     val mConfiguredWidthField = XposedHelpers.findFieldIfExists(config.javaClass, "mConfiguredSize")
                     if (mConfiguredWidthField != null) {
@@ -427,7 +474,17 @@ object CameraHook {
                 } catch (_: Throwable) {}
             }
         } catch (_: Throwable) {}
-        return Pair(1280, 720) // Safe default for the Redmi 14C
+        
+        // Final fallback: check our telemetry map using the extracted surface
+        if (altSurface != null) {
+            val tracked = surfaceSizes[altSurface]
+            if (tracked != null) {
+                Log.d(TAG, "VirtuCam_Hook: Using tracked telemetry size: ${tracked.first}x${tracked.second}")
+                return tracked
+            }
+        }
+        
+        return Pair(1280, 720) // Safe default if zero telemetry
     }
 
     @Suppress("UNCHECKED_CAST")
@@ -746,6 +803,11 @@ object CameraHook {
         }
 
         fun getSurfaceSize(surface: Surface): Pair<Int, Int> {
+            // Priority 1: Our robust telemetry map
+            val tracked = surfaceSizes[surface]
+            if (tracked != null) return tracked
+
+            // Priority 2: Generic fallback (Legacy)
             return Pair(1280, 720)
         }
     }
