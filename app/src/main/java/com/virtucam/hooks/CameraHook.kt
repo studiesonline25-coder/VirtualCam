@@ -60,6 +60,7 @@ object CameraHook {
     // [ONCE AND FOR ALL] Surface tracking and crash prevention structures
     private val surfaceFormats = Collections.synchronizedMap(WeakHashMap<Surface, Int>())
     private val hookedListenerClasses = java.util.Collections.newSetFromMap(java.util.WeakHashMap<Class<*>, Boolean>())
+    private val captureSurfaces = java.util.Collections.newSetFromMap(java.util.WeakHashMap<Surface, Boolean>())
 
     /**
      * Initialize all camera hooks
@@ -74,6 +75,7 @@ object CameraHook {
             hookCaptureRequest(lpparam)
             hookSubmitCaptureRequest(lpparam)
             hookCameraError(lpparam)
+            hookCaptureSurfaces(lpparam)
             hookCameraDevice(lpparam)
             hookCameraDeviceOutputConfigurations(lpparam)
             hookCamera1(lpparam)
@@ -111,6 +113,32 @@ object CameraHook {
                 param.result = null
             }
         })
+    }
+
+    private fun hookCaptureSurfaces(lpparam: XC_LoadPackage.LoadPackageParam) {
+        try {
+            val mediaCodecClass = XposedHelpers.findClassIfExists("android.media.MediaCodec", lpparam.classLoader)
+            if (mediaCodecClass != null) {
+                XposedBridge.hookAllMethods(mediaCodecClass, "createInputSurface", object : XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        val s = param.result as? Surface ?: return
+                        captureSurfaces.add(s)
+                        Log.d(TAG, "VirtuCam_Hook: Tracked MediaCodec Capture Surface")
+                    }
+                })
+            }
+            
+            val mediaRecorderClass = XposedHelpers.findClassIfExists("android.media.MediaRecorder", lpparam.classLoader)
+            if (mediaRecorderClass != null) {
+                XposedBridge.hookAllMethods(mediaRecorderClass, "getSurface", object : XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        val s = param.result as? Surface ?: return
+                        captureSurfaces.add(s)
+                        Log.d(TAG, "VirtuCam_Hook: Tracked MediaRecorder Capture Surface")
+                    }
+                })
+            }
+        } catch (_: Throwable) {}
     }
 
     @Volatile
@@ -253,6 +281,7 @@ object CameraHook {
                 val h = XposedHelpers.callMethod(reader, "getHeight") as? Int ?: 0
                 
                 surfaceFormats[surface] = format
+                captureSurfaces.add(surface)
                 if (w > 0 && h > 0) {
                     surfaceSizes[surface] = Pair(w, h)
                     Log.d(TAG, "VirtuCam_Hook: Tracked ImageReader surface ${w}x${h} format=$format")
@@ -591,19 +620,20 @@ object CameraHook {
                             stopOldPipeline()
                             
                             val newSurfaces = ArrayList<Surface>()
-                            val targetSurfaces = ArrayList<Surface>()
+                            val targetSurfaces = ArrayList<Pair<Surface, Boolean>>()
                             
                             for (targetSurface in surfacesList) {
+                                val isCapture = captureSurfaces.contains(targetSurface)
                                 val format = SurfaceUtils.getSurfaceFormat(targetSurface)
                                 val isPreview = (format == 0x22 || format == 0x1)
                                 
                                 val bridge = if (!isPreview) {
                                     val b = FormatConverterBridge(1280, 720, targetSurface, format)
                                     activeBridges.add(b)
-                                    targetSurfaces.add(b.inputSurface ?: targetSurface)
+                                    targetSurfaces.add(Pair(b.inputSurface ?: targetSurface, isCapture))
                                     b
                                 } else {
-                                    targetSurfaces.add(targetSurface)
+                                    targetSurfaces.add(Pair(targetSurface, isCapture))
                                     null
                                 }
                                 
@@ -652,7 +682,7 @@ object CameraHook {
                             
                             stopOldPipeline()
                             
-                            val targetSurfaces = ArrayList<Surface>()
+                            val targetSurfaces = ArrayList<Pair<Surface, Boolean>>()
                             
                             for (config in configs) {
                                 if (config == null) continue
@@ -661,8 +691,9 @@ object CameraHook {
                                 val targetSurface = getSurfaceMethod.invoke(config) as? Surface
                                 
                                 if (targetSurface != null) {
+                                    val isCapture = captureSurfaces.contains(targetSurface)
                                     val resolvedSurface = swapSurfaceInOutputConfig(config, targetSurface)
-                                    targetSurfaces.add(resolvedSurface)
+                                    targetSurfaces.add(Pair(resolvedSurface, isCapture))
                                 }
                             }
                             
@@ -699,7 +730,7 @@ object CameraHook {
                                 
                                 stopOldPipeline()
                                 
-                                val targetSurfaces = ArrayList<Surface>()
+                                val targetSurfaces = ArrayList<Pair<Surface, Boolean>>()
                                 
                                 for (config in configs) {
                                     if (config == null) continue
@@ -707,8 +738,9 @@ object CameraHook {
                                     val targetSurface = getSurfaceMethod.invoke(config) as? Surface
                                     
                                     if (targetSurface != null) {
+                                        val isCapture = captureSurfaces.contains(targetSurface)
                                         val resolvedSurface = swapSurfaceInOutputConfig(config, targetSurface)
-                                        targetSurfaces.add(resolvedSurface)
+                                        targetSurfaces.add(Pair(resolvedSurface, isCapture))
                                     }
                                 }
                                 
@@ -750,14 +782,15 @@ object CameraHook {
         surfaceMap.clear()
     }
 
-    private fun startRenderThreads(targetSurfaces: List<Surface>) {
+    private fun startRenderThreads(targetSurfaces: List<Pair<Surface, Boolean>>) {
         val context = AndroidAppHelper.currentApplication() ?: return
         
         var sensorOrientation = 0
         try {
             val cameraManager = context.getSystemService(android.content.Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
-            val characteristics = cameraManager.getCameraCharacteristics("0")
+            val characteristics = cameraManager.getCameraCharacteristics(lastOpenedCameraId ?: "0")
             sensorOrientation = characteristics.get(android.hardware.camera2.CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+            Log.d(TAG, "VirtuCam_Hook: Using SENSOR_ORIENTATION $sensorOrientation for camera $lastOpenedCameraId")
         } catch (e: Exception) {
             Log.e(TAG, "VirtuCam_Hook: Failed to read SENSOR_ORIENTATION", e)
         }
@@ -818,7 +851,7 @@ object CameraHook {
  * Dedicated thread targeting the hijacked surfaces via EGL
  */
 class VirtualRenderThread(
-    private val targetSurfaces: List<Surface>,
+    private val targetSurfaces: List<Pair<Surface, Boolean>>,
     private val context: android.content.Context,
     private val isVideo: Boolean,
     private val isStream: Boolean,
@@ -830,7 +863,7 @@ class VirtualRenderThread(
     private var isRunning = true
     
     private var eglCore: EglCore? = null
-    private val eglSurfaces = mutableListOf<android.opengl.EGLSurface>()
+    private val eglSurfaceTargets = mutableListOf<Pair<android.opengl.EGLSurface, Boolean>>()
     private var textureRenderer: TextureRenderer? = null
     
     private var videoPlayer: VideoPlayer? = null
@@ -853,22 +886,22 @@ class VirtualRenderThread(
             eglCore = EglCore()
             
             // Create EGL surfaces for ALL targets
-            for (surface in targetSurfaces) {
+            for (targetPair in targetSurfaces) {
                 try {
-                    val es = eglCore!!.createWindowSurface(surface)
-                    eglSurfaces.add(es)
+                    val es = eglCore!!.createWindowSurface(targetPair.first)
+                    eglSurfaceTargets.add(Pair(es, targetPair.second))
                 } catch (e: Exception) {
                     Log.e("VirtuCam_Render", "Failed to create EGL surface for target", e)
                 }
             }
             
-            if (eglSurfaces.isEmpty()) {
+            if (eglSurfaceTargets.isEmpty()) {
                 Log.e("VirtuCam_Render", "No valid target surfaces. Exiting.")
                 return
             }
 
             // Make the first one current for init
-            eglCore!!.makeCurrent(eglSurfaces[0])
+            eglCore!!.makeCurrent(eglSurfaceTargets[0].first)
             
             textureRenderer = TextureRenderer(isVideo)
             textureRenderer!!.init()
@@ -955,15 +988,16 @@ class VirtualRenderThread(
     }
 
     private fun drawToAllSurfaces(matrix: FloatArray, contentW: Int, contentH: Int): Boolean {
-        val it = eglSurfaces.iterator()
+        val it = eglSurfaceTargets.iterator()
         while (it.hasNext()) {
-            val es = it.next()
+            val (es, isCapture) = it.next()
             try {
                 eglCore!!.makeCurrent(es)
                 val vw = eglCore!!.querySurface(es, android.opengl.EGL14.EGL_WIDTH)
                 val vh = eglCore!!.querySurface(es, android.opengl.EGL14.EGL_HEIGHT)
                 
-                textureRenderer?.draw(matrix, contentW, contentH, vw, vh, getTargetRatio(vw, vh))
+                val applyRotation = if (isCapture) sensorOrientation else 0
+                textureRenderer?.draw(matrix, contentW, contentH, vw, vh, getTargetRatio(vw, vh), applyRotation)
                 
                 if (eglCore?.swapBuffers(es) == false) {
                     Log.w("VirtuCam_Render", "Surface abandoned, removing.")
@@ -973,7 +1007,7 @@ class VirtualRenderThread(
                 it.remove()
             }
         }
-        return eglSurfaces.isNotEmpty()
+        return eglSurfaceTargets.isNotEmpty()
     }
 
     private fun releaseResources() {
@@ -983,10 +1017,10 @@ class VirtualRenderThread(
         mediaSurface?.release()
         mediaSurfaceTexture?.release()
         
-        eglSurfaces.forEach { 
-            try { eglCore?.releaseSurface(it) } catch (_: Exception) {}
+        eglSurfaceTargets.forEach { 
+            try { eglCore?.releaseSurface(it.first) } catch (_: Exception) {}
         }
-        eglSurfaces.clear()
+        eglSurfaceTargets.clear()
         
         textureRenderer?.release()
         eglCore?.release()
