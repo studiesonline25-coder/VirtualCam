@@ -155,8 +155,8 @@ class TextureRenderer(private val isVideo: Boolean = true) {
             // Apply physical rotation to compensate for Camera Sensor Orientation
             // Only applied if rotationDegrees != 0 (e.g. Capture Surfaces)
             if (rotationDegrees != 0) {
-                // OpenGL rotation is CCW, so -rotationDegrees rotates CW
-                Matrix.rotateM(mvpMatrix, 0, -rotationDegrees.toFloat(), 0f, 0f, 1f)
+                // OpenGL rotation is CCW. We apply the positive sensor orientation to properly stand the video upright.
+                Matrix.rotateM(mvpMatrix, 0, rotationDegrees.toFloat(), 0f, 0f, 1f)
             }
 
             val isSnapshot = viewWidth >= 2500 || viewHeight >= 2500
