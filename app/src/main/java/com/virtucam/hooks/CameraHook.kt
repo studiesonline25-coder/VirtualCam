@@ -429,7 +429,7 @@ object CameraHook {
             dummySinkHandler = Handler(dummySinkThread!!.looper)
         }
         
-        val originalFormat = SurfaceUtils.getSurfaceFormat(targetSurface ?: original) // Use original format to prevent HAL crash!
+        val originalFormat = if (targetSurface != null) SurfaceUtils.getSurfaceFormat(targetSurface) else android.graphics.ImageFormat.YUV_420_888
         
         Log.e(TAG, "DIAGNOSTIC_VIRTUCAM: Creating Dummy Sink Surface. Width=$width, Height=$height, Format=$originalFormat")
 
@@ -471,7 +471,7 @@ object CameraHook {
             surfaceMap[targetSurface] = surface
         }
         
-        Log.d(TAG, "VirtuCam_Hook: Created active ImageReader dummy sink (${width}x${height}, format=$format)")
+        Log.d(TAG, "VirtuCam_Hook: Created active ImageReader dummy sink (${width}x${height}, format=$originalFormat)")
         return surface
     }
 
