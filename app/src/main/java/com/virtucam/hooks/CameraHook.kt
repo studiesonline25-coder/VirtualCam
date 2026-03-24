@@ -429,11 +429,18 @@ object CameraHook {
             dummySinkHandler = Handler(dummySinkThread!!.looper)
         }
         
-        // Use YUV_420_888 as it's universally supported for sinks
-        val format = android.graphics.ImageFormat.YUV_420_888
+        val originalFormat = SurfaceUtils.getSurfaceFormat(targetSurface ?: original) // Use original format to prevent HAL crash!
+        
+        Log.e(TAG, "DIAGNOSTIC_VIRTUCAM: Creating Dummy Sink Surface. Width=$width, Height=$height, Format=$originalFormat")
+
         // [STABILITY FIX] Use maxImages=5 to give the Camera HAL plenty of breathing room during bursts. 
         // A value of 1 crashes the HAL if our encoder blocks the queue even for a few milliseconds (Error 4).
-        val reader = ImageReader.newInstance(width, height, format, 5)
+        val reader = try {
+            ImageReader.newInstance(width, height, originalFormat, 5)
+        } catch (e: Exception) {
+            Log.e(TAG, "DIAGNOSTIC_VIRTUCAM: Failed to create ImageReader with $width x $height format $originalFormat! Trying YUV fallback...", e)
+            ImageReader.newInstance(width, height, android.graphics.ImageFormat.YUV_420_888, 5)
+        }
         
         reader.setOnImageAvailableListener({ ir ->
             try {
@@ -530,7 +537,10 @@ object CameraHook {
         val format = SurfaceUtils.getSurfaceFormat(targetSurface)
         val isPreview = (format == 0x22 || format == 0x1)
         
+        Log.e(TAG, "DIAGNOSTIC_VIRTUCAM: Swapping OutputConfig Surface. Size=${w}x${h}, Format=$format, isPreview=$isPreview")
+        
         val bridge = if (!isPreview) {
+            Log.e(TAG, "DIAGNOSTIC_VIRTUCAM: Creating FormatConverterBridge for $w x $h (Format $format)")
             val b = FormatConverterBridge(w, h, targetSurface, format)
             activeBridges.add(b)
             b

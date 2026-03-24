@@ -99,8 +99,15 @@ class FormatConverterBridge(
         val rgbaBytes = cachedRgbaData ?: return
         
         val targetPlanes = targetImage.planes
-        if (targetPlanes.size < 3) return
+        if (targetPlanes.size < 3) {
+            Log.e(TAG, "DIAGNOSTIC_VIRTUCAM: Target YUV image lacks 3 planes!")
+            return
+        }
         
+        val tW = targetImage.width
+        val tH = targetImage.height
+        Log.e(TAG, "DIAGNOSTIC_VIRTUCAM: Overwriting YUV: Target=${tW}x${tH}, Bridge=${width}x${height}")
+
         val yBuffer = targetPlanes[0].buffer
         val uBuffer = targetPlanes[1].buffer
         val vBuffer = targetPlanes[2].buffer
@@ -172,10 +179,18 @@ class FormatConverterBridge(
         if (planes.isEmpty()) return
             
             val jpegBuffer = planes[0].buffer
-            if (!jpegBuffer.hasRemaining()) return
+            if (!jpegBuffer.hasRemaining()) {
+                 Log.e(TAG, "DIAGNOSTIC_VIRTUCAM: Target JPEG buffer has no remaining capacity!")
+                 return
+            }
+            
+            val tW = targetImage.width
+            val tH = targetImage.height
+            Log.e(TAG, "DIAGNOSTIC_VIRTUCAM: Overwriting JPEG: Target=${tW}x${tH}, Bridge=${width}x${height}, capacity=${jpegBuffer.capacity()}")
             
             val expectedSize = width * height * 4
             if (rgbaBytes.size < expectedSize) {
+                Log.e(TAG, "DIAGNOSTIC_VIRTUCAM: rgbaBytes too small! expected $expectedSize, got ${rgbaBytes.size}")
                 throw IllegalStateException("FormatConverterBridge: rgbaBytes too small! expected $expectedSize, got ${rgbaBytes.size}")
             }
             
