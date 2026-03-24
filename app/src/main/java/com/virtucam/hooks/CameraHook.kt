@@ -1006,6 +1006,17 @@ class VirtualRenderThread(
                     
                     while (isRunning) {
                         if (!drawToAllSurfaces(matrix, staticImageW, staticImageH)) break
+                        
+                        // Handle Photo/Capture Requests (Static Image)
+                        synchronized(this) {
+                            while (captureCount > 0) {
+                                val capture = captureQueue.poll()
+                                val timestamp = capture?.first ?: System.nanoTime()
+                                formatBridges.forEach { it.value.pushLatestFrameToWriter(timestamp) }
+                                captureCount--
+                            }
+                        }
+                        
                         sleep(33) // ~30 fps simulated heartbeat
                     }
                 }
@@ -1031,6 +1042,19 @@ class VirtualRenderThread(
             
             val (vw, vh) = sizeProvider()
             if (!drawToAllSurfaces(matrix, vw, vh)) break
+
+            // Handle Photo/Capture Requests
+            synchronized(this) {
+                while (captureCount > 0) {
+                    val capture = captureQueue.poll()
+                    val timestamp = capture?.first ?: System.nanoTime()
+                    
+                    formatBridges.forEach { 
+                        it.value.pushLatestFrameToWriter(timestamp) 
+                    }
+                    captureCount--
+                }
+            }
             
             sleep(30)
         }
