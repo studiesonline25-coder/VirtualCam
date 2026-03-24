@@ -97,6 +97,24 @@ class EglCore {
         return eglSurface
     }
 
+    /**
+     * Creates an EGL pbuffer surface.
+     */
+    fun createOffscreenSurface(width: Int, height: Int): EGLSurface {
+        val surfaceAttribs = intArrayOf(
+            EGL14.EGL_WIDTH, width,
+            EGL14.EGL_HEIGHT, height,
+            EGL14.EGL_NONE
+        )
+        val eglSurface = EGL14.eglCreatePbufferSurface(
+            eglDisplay, eglConfig, surfaceAttribs, 0
+        )
+        if (eglSurface == null || eglSurface === EGL14.EGL_NO_SURFACE) {
+            throw RuntimeException("Failed to create pbuffer surface")
+        }
+        return eglSurface
+    }
+
     fun makeCurrent(eglSurface: EGLSurface) {
         if (!EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)) {
             throw RuntimeException("eglMakeCurrent failed")

@@ -917,8 +917,15 @@ class VirtualRenderThread(
     }
 
     override fun run() {
+        var dummyEs: android.opengl.EGLSurface? = null
         try {
             eglCore = EglCore()
+            
+            // [CRITICAL] Create a 1x1 pbuffer so we can make the context current for GLES init.
+            // Without a current surface, OpenGL functions (GenTextures, CreateProgram) fail silently.
+            dummyEs = eglCore!!.createOffscreenSurface(1, 1)
+            eglCore!!.makeCurrent(dummyEs)
+            
             textureRenderer = TextureRenderer(isVideo)
             textureRenderer!!.init()
             
@@ -928,9 +935,8 @@ class VirtualRenderThread(
                 mediaSurfaceTexture = SurfaceTexture(textureRenderer!!.textureId)
                 mediaSurface = Surface(mediaSurfaceTexture)
                 val hasNewFrame = java.util.concurrent.atomic.AtomicBoolean(false)
-                mediaSurfaceTexture?.setOnFrameAvailableListener { hasNewFrame.set(true) }
                 
-                streamPlayer = StreamPlayer(context, streamUrl, mediaSurface!!) {}
+                streamPlayer = StreamPlayer(context, streamUrl, mediaSurface!!) { hasNewFrame.set(true) }
                 streamPlayer!!.start()
                 
                 renderLoop(hasNewFrame) { streamPlayer!!.videoWidth to streamPlayer!!.videoHeight }
@@ -944,9 +950,7 @@ class VirtualRenderThread(
                 if (pfd != null) {
                     val fd = pfd.fileDescriptor
                     val hasNewFrame = java.util.concurrent.atomic.AtomicBoolean(false)
-                    mediaSurfaceTexture?.setOnFrameAvailableListener { hasNewFrame.set(true) }
-                    
-                    videoPlayer = VideoPlayer(fd, mediaSurface!!) {}
+                    videoPlayer = VideoPlayer(fd, mediaSurface!!) { hasNewFrame.set(true) }
                     videoPlayer!!.start()
                     
                     renderLoop(hasNewFrame) { videoPlayer!!.videoWidth to videoPlayer!!.videoHeight }
@@ -974,9 +978,10 @@ class VirtualRenderThread(
                     }
                 }
             }
-        } catch (t: Throwable) {
-            Log.e("VirtuCam_Render", "Master Render thread error", t)
         } finally {
+            if (dummyEs != null) {
+                try { eglCore?.releaseSurface(dummyEs) } catch (_: Exception) {}
+            }
             releaseResources()
         }
     }
