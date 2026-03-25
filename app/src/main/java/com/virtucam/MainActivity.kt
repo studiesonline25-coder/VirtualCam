@@ -310,8 +310,8 @@ class MainActivity : AppCompatActivity() {
             .setBufferDurationsMs(
                 /* minBufferMs = */ 1000, 
                 /* maxBufferMs = */ 5000, 
-                /* bufferForPlaybackMs = */ 0, // CRITICAL: Start on first frame
-                /* bufferForPlaybackAfterRebufferMs = */ 0
+                /* bufferForPlaybackMs = */ 200, // 200ms cushion to avoid green screen (IDR frame wait)
+                /* bufferForPlaybackAfterRebufferMs = */ 200
             )
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
