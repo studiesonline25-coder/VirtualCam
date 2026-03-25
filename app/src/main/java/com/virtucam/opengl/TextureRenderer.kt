@@ -137,7 +137,7 @@ class TextureRenderer(private val isVideo: Boolean = true) {
     /**
      * Draw the texture to currently bound frame buffer
      */
-    fun draw(transformMatrix: FloatArray, videoWidth: Int = 0, videoHeight: Int = 0, viewWidth: Int = 0, viewHeight: Int = 0, targetRatio: Float = 0f, rotationDegrees: Int = 0, isMirrored: Boolean = false, zoomFactor: Float = 1.0f) {
+    fun draw(transformMatrix: FloatArray, videoWidth: Int = 0, videoHeight: Int = 0, viewWidth: Int = 0, viewHeight: Int = 0, targetRatio: Float = 0f, rotationDegrees: Int = 0, userRotation: Int = 0, isMirrored: Boolean = false, zoomFactor: Float = 1.0f) {
         GLES20.glClearColor(0.0f, 0.0f, 0.0f, 1.0f)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
 
@@ -152,18 +152,18 @@ class TextureRenderer(private val isVideo: Boolean = true) {
         Matrix.setIdentityM(mvpMatrix, 0)
         
         if (videoWidth > 0 && videoHeight > 0 && viewWidth > 0 && viewHeight > 0) {
-            // Apply physical rotation to compensate for Camera Sensor Orientation
-            // Only applied if rotationDegrees != 0 (e.g. Capture Surfaces)
-            if (rotationDegrees != 0) {
-                // OpenGL rotation is CCW. We apply the positive sensor orientation to properly stand the video upright.
-                Matrix.rotateM(mvpMatrix, 0, rotationDegrees.toFloat(), 0f, 0f, 1f)
+            // Apply Physical + Manual Rotation
+            val totalRotation = (rotationDegrees + userRotation) % 360
+            if (totalRotation != 0) {
+                // OpenGL rotation is CCW. We apply the degrees to stand the video upright.
+                Matrix.rotateM(mvpMatrix, 0, totalRotation.toFloat(), 0f, 0f, 1f)
             }
 
             val isSnapshot = viewWidth >= 2500 || viewHeight >= 2500
             val viewRatio = if (targetRatio > 0f && !isSnapshot) targetRatio else (viewWidth.toFloat() / viewHeight.toFloat())
             
             // If we rotated 90 or 270, the effective video dimensions are swapped for ratio calc
-            val effectiveVideoRatio = if (rotationDegrees == 90 || rotationDegrees == 270) {
+            val effectiveVideoRatio = if (totalRotation == 90 || totalRotation == 270 || totalRotation == -90 || totalRotation == -270) {
                 videoHeight.toFloat() / videoWidth.toFloat()
             } else {
                 videoWidth.toFloat() / videoHeight.toFloat()

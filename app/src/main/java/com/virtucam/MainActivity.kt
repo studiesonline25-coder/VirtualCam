@@ -153,6 +153,23 @@ class MainActivity : AppCompatActivity() {
                 handleStreamSelected(config.streamUrl!!)
             }
         }
+
+        // Rotation Button
+        binding.btnRotation.setOnClickListener {
+            val nextRotation = (config.rotation + 90) % 360
+            config.rotation = nextRotation
+            binding.btnRotation.text = "${nextRotation}°"
+            Toast.makeText(this, "Rotation: ${nextRotation}°", Toast.LENGTH_SHORT).show()
+            
+            // Apply to previews immediately
+            binding.playerPreview.rotation = nextRotation.toFloat()
+            binding.imagePreview.rotation = nextRotation.toFloat()
+            
+            // Re-start preview if it's currently showing a stream
+            if (config.isStream && !config.streamUrl.isNullOrEmpty()) {
+                handleStreamSelected(config.streamUrl!!)
+            }
+        }
     }
     
     private fun loadSavedState() {
@@ -184,6 +201,12 @@ class MainActivity : AppCompatActivity() {
         
         // Load RTSP state
         binding.rtspTcpSwitch.isChecked = config.rtspUseTcp
+
+        // Load Rotation state
+        val rot = config.rotation
+        binding.btnRotation.text = "${rot}°"
+        binding.playerPreview.rotation = rot.toFloat()
+        binding.imagePreview.rotation = rot.toFloat()
     }
     
     private fun updateStatusUI(enabled: Boolean) {
