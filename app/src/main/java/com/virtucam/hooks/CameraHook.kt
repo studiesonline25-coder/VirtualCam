@@ -280,16 +280,18 @@ object CameraHook {
                         // By disabling the Parallel Engine (MiAlgo/MIVI), we prevent it from rejecting virtual buffers.
                         val template = try { XposedHelpers.getIntField(builder, "mTemplate") } catch (e: Exception) { -1 }
                         
-                        // 1. DYNAMIC SUPPRESSION: Automatically disable all discovered vendor tags related to post-processing
+                        // 1. DYNAMIC SUPPRESSION: Automatically disable multi-frame and AI tags, 
+                        // but DO NOT disable 'parallel', 'mivi', or 'algoengine'. If we disable the core
+                        // processing engines, the camera app never receives the final JPEG, leading to 
+                        // an IS_PENDING=1 MediaStore lock (the "disappearing photo" via Gallery exception).
                         for ((name, key) in discoveredXiaomiKeys) {
                             try {
-                                if (name.contains("parallel.enabled", true) || 
-                                    name.contains("mivi.enabled", true) || 
-                                    name.contains("algoengine.enabled", true) ||
-                                    name.contains("hdr.enabled", true) ||
+                                if (name.contains("hdr.enabled", true) ||
                                     name.contains("mfnr.enabled", true) ||
                                     name.contains("snapshot.optimize", true) ||
-                                    name.contains("super.pixel.enabled", true)) {
+                                    name.contains("super.pixel", true) ||
+                                    name.contains("super.night", true) ||
+                                    name.contains("sat.enabled", true)) {
                                     
                                     // Set to false or 0 based on reasonable guess (setXiaomiVendorTag handles the .set() call)
                                     setXiaomiVendorTag(builder, name, false)
@@ -300,11 +302,6 @@ object CameraHook {
                             } catch (_: Exception) {}
                         }
 
-                        // 2. HARDCODED OVERRIDES: Ensure critical known tags are set (even if not discovered in availableKeys)
-                        setXiaomiVendorTag(builder, "xiaomi.parallel.enabled", 0.toByte())
-                        setXiaomiVendorTag(builder, "xiaomi.mivi.enabled", false)
-                        setXiaomiVendorTag(builder, "xiaomi.algoengine.enabled", 0.toByte())
-                        
                         if (template != 2 && template != 5) return // Early exit for preview if it's not a capture request
                         
                         Log.d(TAG, "XiaomiBypass: Applied dynamic suppression to template $template")
