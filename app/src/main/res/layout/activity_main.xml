@@ -121,6 +121,18 @@
                         app:use_controller="false"
                         app:resize_mode="fixed_width" />
 
+                    <TextView
+                        android:id="@+id/tvStreamStatus"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_gravity="center"
+                        android:text="Connecting..."
+                        android:textColor="@color/white"
+                        android:textSize="14sp"
+                        android:background="#80000000"
+                        android:padding="8dp"
+                        android:visibility="gone" />
+
                     <ImageView
                         android:id="@+id/imagePreview"
                         android:layout_width="match_parent"

@@ -293,8 +293,38 @@ class MainActivity : AppCompatActivity() {
             
         binding.playerPreview.player = previewPlayer
         
-        val uri = Uri.parse(url)
-        val mediaSource = if (url.startsWith("rtsp", ignoreCase = true)) {
+        // Trim URL to prevent spaces from breaking detection
+        val trimmedUrl = url.trim()
+        val uri = Uri.parse(trimmedUrl)
+        
+        binding.tvStreamStatus.visibility = View.VISIBLE
+        binding.tvStreamStatus.text = "Connecting..."
+
+        previewPlayer?.addListener(object : androidx.media3.common.Player.Listener {
+            override fun onPlaybackStateChanged(state: Int) {
+                when (state) {
+                    androidx.media3.common.Player.STATE_BUFFERING -> {
+                        binding.tvStreamStatus.visibility = View.VISIBLE
+                        binding.tvStreamStatus.text = "Buffering... (Waiting for Keyframe)"
+                    }
+                    androidx.media3.common.Player.STATE_READY -> {
+                        binding.tvStreamStatus.visibility = View.GONE
+                    }
+                    androidx.media3.common.Player.STATE_ENDED -> {
+                        binding.tvStreamStatus.visibility = View.VISIBLE
+                        binding.tvStreamStatus.text = "Stream Ended"
+                    }
+                    androidx.media3.common.Player.STATE_IDLE -> {}
+                }
+            }
+
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                binding.tvStreamStatus.visibility = View.VISIBLE
+                binding.tvStreamStatus.text = "Error: ${error.localizedMessage}"
+            }
+        })
+        
+        val mediaSource = if (trimmedUrl.startsWith("rtsp", ignoreCase = true)) {
             androidx.media3.exoplayer.rtsp.RtspMediaSource.Factory()
                 .setForceUseRtpTcp(config.rtspUseTcp)
                 .createMediaSource(androidx.media3.common.MediaItem.fromUri(uri))
