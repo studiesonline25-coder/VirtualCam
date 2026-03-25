@@ -24,7 +24,8 @@ class FormatConverterBridge(
     val width: Int,
     val height: Int,
     val outputSurface: Surface? = null,
-    val outputFormat: Int = android.graphics.ImageFormat.YUV_420_888
+    val outputFormat: Int = android.graphics.ImageFormat.YUV_420_888,
+    val sensorOrientation: Int = 270 // Default for most front cameras
 ) {
     companion object {
         private const val TAG = "VirtuCam_Bridge"
@@ -138,35 +139,66 @@ class FormatConverterBridge(
             val planes = targetImage.planes
             val format = targetImage.format
             
-            Log.d(TAG, "DIAGNOSTIC_VIRTUCAM: Intercepting YUV Capture. Target=${w}x${h}, Format=$format, Bridge=${width}x${height}")
+            Log.d(TAG, "DIAGNOSTIC_VIRTUCAM: Intercepting YUV Capture. Target=${w}x${h}, Format=$format, Bridge=${width}x${height}, SensorRot=$sensorOrientation")
             
-            // Detect rotation: Source is always width x height. 
-            val rotation = if (w == height && h == width) 90 else 0
+            // --- SMART-FIT PIXEL MAPPING ---
+            // Goal: Fill Target(w, h) from Source(width, height) without stretching.
+            // Includes Sensor Rotation (Hardware Mimicry) and Center-Cropping.
+            
+            val srcW = width.toFloat()
+            val srcH = height.toFloat()
+            val tgtW = w.toFloat()
+            val tgtH = h.toFloat()
 
-            // Y Plane (Plane 0)
-            val yPlane = planes[0]
-            val yBuffer = yPlane.buffer
-            val yRowStride = yPlane.rowStride
-            val yPixStride = yPlane.pixelStride
+            // Calculate effective source dimensions after sensor rotation
+            // If rotating 90/270, source's logic width/height are swapped
+            val isRotated = (sensorOrientation == 90 || sensorOrientation == 270)
+            val logicSrcW = if (isRotated) srcH else srcW
+            val logicSrcH = if (isRotated) srcW else srcH
+
+            // Scale factor to Fit (Center-Crop)
+            val scale = Math.max(tgtW / logicSrcW, tgtH / logicSrcH)
             
-            val srcW = width
-            val srcH = height
-            val srcStrideArr = srcW * 4
+            // Calculations for center crop
+            // offset = half of the unused space in source coordinate system
+            val logicCropW = tgtW / scale
+            val logicCropH = tgtH / scale
+            val offsetX = (logicSrcW - logicCropW) / 2f
+            val offsetY = (logicSrcH - logicCropH) / 2f
+
+            val srcStrideArr = width * 4
 
             // 1. Process Y Plane
-            for (row in 0 until h) {
-                val rowPos = row * yRowStride
-                for (col in 0 until w) {
-                    val srcRow = if (rotation == 90) col else row
-                    val srcCol = if (rotation == 90) (h - 1 - row) else col
+            for (ty in 0 until h) {
+                val rowPos = ty * yRowStride
+                for (tx in 0 until w) {
+                    // a) Map target(tx, ty) back to logic source coordinate system
+                    val lx = tx / scale + offsetX
+                    val ly = ty / scale + offsetY
+
+                    // b) Apply rotation to get physical source coordinates (RGBA cache)
+                    var sx = 0f
+                    var sy = 0f
+                    when (sensorOrientation) {
+                        0 -> { sx = lx; sy = ly }
+                        90 -> { sx = ly; sy = srcH - 1 - lx }
+                        180 -> { sx = srcW - 1 - lx; sy = srcH - 1 - ly }
+                        270 -> { sx = srcW - 1 - ly; sy = lx }
+                    }
+
+                    val srcRow = sx.toInt().coerceIn(0, width - 1)
+                    val srcCol = sy.toInt().coerceIn(0, height - 1)
                     
-                    val rgbaOff = (srcRow * srcStrideArr) + (srcCol * 4)
+                    // Actually, sx is horizontal (width) and sy is vertical (height)
+                    // so sx -> col, sy -> row
+                    val rgbaOff = (srcCol * srcStrideArr) + (srcRow * 4)
+                    
                     if (rgbaOff >= 0 && rgbaOff + 3 < rgbaBytes.size) {
                         val r = rgbaBytes[rgbaOff].toInt() and 0xFF
                         val g = rgbaBytes[rgbaOff+1].toInt() and 0xFF
                         val b = rgbaBytes[rgbaOff+2].toInt() and 0xFF
                         val y = ((66 * r + 129 * g + 25 * b + 128) shr 8) + 16
-                        val pos = rowPos + (col * yPixStride)
+                        val pos = rowPos + (tx * yPixStride)
                         if (pos < yBuffer.capacity()) {
                             yBuffer.put(pos, y.coerceIn(16, 235).toByte())
                         }
@@ -181,22 +213,37 @@ class FormatConverterBridge(
             val isSemiPlanar = (planes.size == 2)
 
             if (isSemiPlanar) {
-                // [XIAOMI FIX] 2-plane semi-planar layout
+                // [XIAOMI FIX] 2-plane semi-planar layout (NV21/NV12)
                 val uvPlane = planes[1]
                 val uvBuffer = uvPlane.buffer
                 val pStride = uvPlane.rowStride
                 val pixStride = uvPlane.pixelStride // Should be 2
                 
-                val tW = w / 2
-                val tH = h / 2
+                val tW_out = w / 2
+                val tH_out = h / 2
                 
-                for (row in 0 until tH) {
-                    val rowPos = row * pStride
-                    for (col in 0 until tW) {
-                        val srcRowForUV = (if (rotation == 90) col else row) * 2
-                        val srcColForUV = (if (rotation == 90) (tH - 1 - row) else col) * 2
+                for (ty in 0 until tH_out) {
+                    val rowPos = ty * pStride
+                    for (tx in 0 until tW_out) {
+                        // a) Map target(tx, ty) back to logic source coordinate system
+                        // Multiply by 2 because this is Chroma (half res)
+                        val lx = (tx * 2) / scale + offsetX
+                        val ly = (ty * 2) / scale + offsetY
+
+                        // b) Apply rotation to get physical source coordinates (RGBA cache)
+                        var sx = 0f
+                        var sy = 0f
+                        when (sensorOrientation) {
+                            0 -> { sx = lx; sy = ly }
+                            90 -> { sx = ly; sy = srcH - 1 - lx }
+                            180 -> { sx = srcW - 1 - lx; sy = srcH - 1 - ly }
+                            270 -> { sx = srcW - 1 - ly; sy = lx }
+                        }
+
+                        val srcRow = sx.toInt().coerceIn(0, width - 1)
+                        val srcCol = sy.toInt().coerceIn(0, height - 1)
                         
-                        val rgbaOff = (srcRowForUV * srcStrideArr) + (srcColForUV * 4)
+                        val rgbaOff = (srcCol * srcStrideArr) + (srcRow * 4)
                         if (rgbaOff >= 0 && rgbaOff + 3 < rgbaBytes.size) {
                             val r = rgbaBytes[rgbaOff].toInt() and 0xFF
                             val g = rgbaBytes[rgbaOff+1].toInt() and 0xFF
@@ -205,12 +252,10 @@ class FormatConverterBridge(
                             val u = ((-38 * r - 74 * g + 112 * b + 128) shr 8) + 128
                             val v = ((112 * r - 94 * g - 18 * b + 128) shr 8) + 128
                             
-                            // NV21 layout: V is at 0, U is at 1
-                            // NV12 layout: U is at 0, V is at 1
                             val firstByte = if (isNv21) v else u
                             val secondByte = if (isNv21) u else v
                             
-                            val pos = rowPos + (col * pixStride)
+                            val pos = rowPos + (tx * pixStride)
                             if (pos + 1 < uvBuffer.capacity()) {
                                 uvBuffer.put(pos, firstByte.coerceIn(16, 240).toByte())
                                 uvBuffer.put(pos + 1, secondByte.coerceIn(16, 240).toByte())
@@ -228,16 +273,28 @@ class FormatConverterBridge(
                     val buffer = plane.buffer
                     val pStride = plane.rowStride
                     val pixStride = plane.pixelStride
-                    val tW = w / 2
-                    val tH = h / 2
+                    val tW_out = w / 2
+                    val tH_out = h / 2
                     
-                    for (row in 0 until tH) {
-                        val rowPos = row * pStride
-                        for (col in 0 until tW) {
-                            val srcRowForUV = (if (rotation == 90) col else row) * 2
-                            val srcColForUV = (if (rotation == 90) (tH - 1 - row) else col) * 2
+                    for (ty in 0 until tH_out) {
+                        val rowPos = ty * pStride
+                        for (tx in 0 until tW_out) {
+                            val lx = (tx * 2) / scale + offsetX
+                            val ly = (ty * 2) / scale + offsetY
+
+                            var sx = 0f
+                            var sy = 0f
+                            when (sensorOrientation) {
+                                0 -> { sx = lx; sy = ly }
+                                90 -> { sx = ly; sy = srcH - 1 - lx }
+                                180 -> { sx = srcW - 1 - lx; sy = srcH - 1 - ly }
+                                270 -> { sx = srcW - 1 - ly; sy = lx }
+                            }
+
+                            val srcRow = sx.toInt().coerceIn(0, width - 1)
+                            val srcCol = sy.toInt().coerceIn(0, height - 1)
                             
-                            val rgbaOff = (srcRowForUV * srcStrideArr) + (srcColForUV * 4)
+                            val rgbaOff = (srcCol * srcStrideArr) + (srcRow * 4)
                             if (rgbaOff >= 0 && rgbaOff + 3 < rgbaBytes.size) {
                                 val r = rgbaBytes[rgbaOff].toInt() and 0xFF
                                 val g = rgbaBytes[rgbaOff+1].toInt() and 0xFF
@@ -249,7 +306,7 @@ class FormatConverterBridge(
                                     ((112 * r - 94 * g - 18 * b + 128) shr 8) + 128
                                 }
                                 
-                                val pos = rowPos + (col * pixStride)
+                                val pos = rowPos + (tx * pixStride)
                                 if (pos < buffer.capacity()) {
                                     buffer.put(pos, chroma.coerceIn(16, 240).toByte())
                                 }

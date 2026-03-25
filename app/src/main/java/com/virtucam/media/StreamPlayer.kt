@@ -59,10 +59,10 @@ class StreamPlayer(
         // 1. LoadControl tuned for ZERO playback buffer (start on first keyframe)
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                /* minBufferMs = */ 1000, 
-                /* maxBufferMs = */ 5000, 
-                /* bufferForPlaybackMs = */ 200, // 200ms cushion to avoid green screen (IDR frame wait)
-                /* bufferForPlaybackAfterRebufferMs = */ 200
+                /* minBufferMs = */ 3000, 
+                /* maxBufferMs = */ 8000, 
+                /* bufferForPlaybackMs = */ 1000, // 1000ms stabilize for Helio G81
+                /* bufferForPlaybackAfterRebufferMs = */ 1500
             )
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
@@ -88,7 +88,8 @@ class StreamPlayer(
         val mediaSource = if (trimmedUrl.startsWith("rtsp", ignoreCase = true)) {
             // Use RtspMediaSource for explicit RTSP support
             RtspMediaSource.Factory()
-                .setForceUseRtpTcp(useTcp) // Configurable: TCP is safer for firewalls, UDP is lower latency
+                .setForceUseRtpTcp(useTcp) 
+                .setDebugLoggingEnabled(true)
                 .createMediaSource(MediaItem.fromUri(uri))
         } else {
             // Default factory for RTMP/HTTP

@@ -75,6 +75,7 @@ object CameraHook {
     @Volatile var zoomFactor: Float = 1.0f
     @Volatile var rtspUseTcp: Boolean = true
     @Volatile var rotation: Int = 0
+    @Volatile var cachedSensorOrientation: Int = 270 // Default for Helio G81 front cameras
 
     // [ONCE AND FOR ALL] Surface tracking and crash prevention structures
     private val surfaceFormats = Collections.synchronizedMap(WeakHashMap<Surface, Int>())
@@ -101,6 +102,7 @@ object CameraHook {
             hookCaptureCallback(lpparam)
             hookXiaomiBypass(lpparam)
             hookXiaomiStorage(lpparam)
+            hookFileOutputStream(lpparam)
             
             Log.d(TAG, "VirtuCam_Hook: All hooks deployed successfully.")
         } catch (t: Throwable) {
@@ -174,7 +176,62 @@ object CameraHook {
         } catch (t: Throwable) {
             Log.e(TAG, "VirtuCam_Hook: Failed to hook CAM_Storage methods", t)
         }
+    
+    /**
+     * [The Ultimate Safety Net]
+     * If Xiaomi's AlgoEngine or MIVI bypasses the Storage.java API (Scenario 2),
+     * we hook the low-level FileOutputStream to catch any .jpg writes in temp/cache dirs.
+     */
+    private fun hookFileOutputStream(lpparam: XC_LoadPackage.LoadPackageParam) {
+        XposedHelpers.findAndHookConstructor(
+            "java.io.FileOutputStream",
+            lpparam.classLoader,
+            java.io.File::class.java,
+            Boolean::class.java,
+            object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam) {
+                    try {
+                        if (!isEnabled) return
+                        val virtualJpeg = latestVirtualJpeg ?: return
+                        val file = param.args[0] as? java.io.File ?: return
+                        val path = file.absolutePath
+                        
+                        // Only intercept if it looks like a camera capture artifact
+                        if (path.endsWith(".jpg", true) && (path.contains("dcim", true) || path.contains("camera", true) || path.contains("cache", true))) {
+                            // We don't block the constructor, but we will soon overwrite the content
+                            Log.w(TAG, "VirtuCam_Storage: FileOutputStream detected for $path. Preparing for late-stage swap.")
+                        }
+                    } catch (_: Throwable) {}
+                }
+            }
+        )
+        
+        XposedHelpers.findAndHookMethod(
+            "java.io.FileOutputStream",
+            lpparam.classLoader,
+            "write",
+            ByteArray::class.java,
+            object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam) {
+                    try {
+                        if (!isEnabled) return
+                        val virtualJpeg = latestVirtualJpeg ?: return
+                        val fos = param.thisObject as java.io.FileOutputStream
+                        
+                        // This is tricky because we don't always have the path here easily in Java 8+ 
+                        // But we can check if this is a large enough write to be an image
+                        val data = param.args[0] as ByteArray
+                        if (data.size > 100000) { // >100KB
+                             param.args[0] = virtualJpeg
+                             Log.w(TAG, "VirtuCam_Storage: FileOutputStream.write() SWAPPED successfully!")
+                             latestVirtualJpeg = null // Clear to avoid reuse
+                        }
+                    } catch (_: Throwable) {}
+                }
+            }
+        )
     }
+
 
     /**
      * Hook CameraCaptureSession.capture() and setRepeatingRequest() to intercept
@@ -315,9 +372,10 @@ object CameraHook {
                 
                 // DIAGNOSTIC: Log key characteristics Veriff might be checking
                 val facing = char.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING)
-                val orientation = char.get(android.hardware.camera2.CameraCharacteristics.SENSOR_ORIENTATION)
+                val orientation = char.get(android.hardware.camera2.CameraCharacteristics.SENSOR_ORIENTATION) ?: 270
                 val level = char.get(android.hardware.camera2.CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL)
                 
+                cachedSensorOrientation = orientation
                 Log.e(TAG, "DIAGNOSTIC_VIRTUCAM: getCameraCharacteristics($cameraId) -> Facing=$facing, Orient=$orientation, HW_Level=$level")
                 
                 val streamMap = char.get(android.hardware.camera2.CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
@@ -836,8 +894,8 @@ object CameraHook {
         Log.e(TAG, "DIAGNOSTIC_VIRTUCAM: Swapping OutputConfig Surface. Size=${w}x${h}, Format=$format, isPreview=$isPreview")
         
         val bridge = if (!isPreview) {
-            Log.e(TAG, "DIAGNOSTIC_VIRTUCAM: Creating FormatConverterBridge for $w x $h (Format $format)")
-            val b = FormatConverterBridge(w, h, targetSurface, format)
+            Log.e(TAG, "DIAGNOSTIC_VIRTUCAM: Creating FormatConverterBridge for $w x $h (Format $format) SensorRot=$cachedSensorOrientation")
+            val b = FormatConverterBridge(w, h, targetSurface, format, cachedSensorOrientation)
             activeBridges.add(b)
             formatBridges[android.util.Size(w, h)] = b
             b
@@ -955,7 +1013,7 @@ object CameraHook {
                                 val isPreview = (format == 0x22 || format == 0x1)
                                 
                                 val bridge = if (!isPreview) {
-                                    val b = FormatConverterBridge(w, h, targetSurface, format)
+                                    val b = FormatConverterBridge(w, h, targetSurface, format, cachedSensorOrientation)
                                     activeBridges.add(b)
                                     formatBridges[android.util.Size(w, h)] = b
                                     targetSurfaces.add(Pair(b.inputSurface ?: targetSurface, isCapture))
