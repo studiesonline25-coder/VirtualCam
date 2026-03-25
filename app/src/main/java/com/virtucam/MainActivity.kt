@@ -34,6 +34,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var config: VirtuCamConfig
     private lateinit var imageLoader: ImageLoader
+    private var previewPlayer: androidx.media3.exoplayer.ExoPlayer? = null
     
     // Media picker launcher supporting both Images and Videos
     private val pickMedia = registerForActivityResult(
@@ -147,6 +148,10 @@ class MainActivity : AppCompatActivity() {
         binding.rtspTcpSwitch.setOnCheckedChangeListener { _, isChecked ->
             config.rtspUseTcp = isChecked
             Toast.makeText(this, if (isChecked) "RTSP TCP mode enabled" else "RTSP UDP mode enabled", Toast.LENGTH_SHORT).show()
+            // Re-start preview if it's currently showing a stream
+            if (config.isStream && !config.streamUrl.isNullOrEmpty()) {
+                handleStreamSelected(config.streamUrl!!)
+            }
         }
     }
     
@@ -268,16 +273,46 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun showStreamSelected(url: String) {
-        binding.imagePlaceholder.visibility = View.VISIBLE
+        binding.imagePlaceholder.visibility = View.GONE
         binding.imagePreview.visibility = View.GONE
+        binding.playerPreview.visibility = View.VISIBLE
         
-        // Assuming we are just showing the stream URL text in the placeholder for now
-        binding.imagePlaceholder.setBackgroundResource(0) // Remove border
-        binding.imagePlaceholder.alpha = 0.5f // Dim it slightly
-        Toast.makeText(this, "Stream Ready: $url", Toast.LENGTH_SHORT).show()
+        // Stop any current video/stream
+        previewPlayer?.stop()
+        previewPlayer?.release()
+        
+        // Setup ExoPlayer for live preview
+        val loadControl = androidx.media3.exoplayer.DefaultLoadControl.Builder()
+            .setBufferDurationsMs(100, 500, 100, 100)
+            .setPrioritizeTimeOverSizeThresholds(true)
+            .build()
+            
+        previewPlayer = androidx.media3.exoplayer.ExoPlayer.Builder(this)
+            .setLoadControl(loadControl)
+            .build()
+            
+        binding.playerPreview.player = previewPlayer
+        
+        val uri = Uri.parse(url)
+        val mediaSource = if (url.startsWith("rtsp", ignoreCase = true)) {
+            androidx.media3.exoplayer.rtsp.RtspMediaSource.Factory()
+                .setForceUseRtpTcp(config.rtspUseTcp)
+                .createMediaSource(androidx.media3.common.MediaItem.fromUri(uri))
+        } else {
+            androidx.media3.exoplayer.source.DefaultMediaSourceFactory(this).createMediaSource(androidx.media3.common.MediaItem.fromUri(uri))
+        }
+        
+        previewPlayer?.setMediaSource(mediaSource)
+        previewPlayer?.prepare()
+        previewPlayer?.play()
+        
+        Toast.makeText(this, "Playing Preview: $url", Toast.LENGTH_SHORT).show()
     }
 
     private fun showSelectedMedia(uri: Uri) {
+        binding.playerPreview.visibility = View.GONE
+        previewPlayer?.stop()
+        
         binding.imagePlaceholder.visibility = View.GONE
         binding.imagePreview.visibility = View.VISIBLE
         
@@ -294,5 +329,16 @@ class MainActivity : AppCompatActivity() {
             data = Uri.parse("https://github.com/LSPosed/LSPatch/releases")
         }
         startActivity(intent)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        previewPlayer?.stop()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        previewPlayer?.release()
+        previewPlayer = null
     }
 }

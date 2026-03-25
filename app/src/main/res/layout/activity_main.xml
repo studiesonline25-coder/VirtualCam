@@ -113,6 +113,14 @@
                     android:background="@drawable/image_placeholder_border"
                     android:layout_marginBottom="16dp">
 
+                    <androidx.media3.ui.PlayerView
+                        android:id="@+id/playerPreview"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:visibility="gone"
+                        app:use_controller="false"
+                        app:resize_mode="fixed_width" />
+
                     <ImageView
                         android:id="@+id/imagePreview"
                         android:layout_width="match_parent"
