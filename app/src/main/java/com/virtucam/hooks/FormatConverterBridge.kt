@@ -119,10 +119,6 @@ class FormatConverterBridge(
 
     /**
      * Synchronously overwrites the target image with our RGBA data converted to YUV.
-     * Uses absolute indexing for maximum robustness against stride and interleave variations.
-     */
-    /**
-     * Synchronously overwrites the target image with our RGBA data converted to YUV.
      * Engineered for Xiaomi MiAlgoEngine (Parallel Service) compatibility.
      * Strict NV21 (V before U) layout for 2-plane semi-planar buffers.
      */
@@ -138,6 +134,11 @@ class FormatConverterBridge(
             val h = targetImage.height
             val planes = targetImage.planes
             val format = targetImage.format
+
+            val yPlane = planes[0]
+            val yBuffer = yPlane.buffer
+            val yRowStride = yPlane.rowStride
+            val yPixStride = yPlane.pixelStride
             
             Log.d(TAG, "DIAGNOSTIC_VIRTUCAM: Intercepting YUV Capture. Target=${w}x${h}, Format=$format, Bridge=${width}x${height}, SensorRot=$sensorOrientation")
             

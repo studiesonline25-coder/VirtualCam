@@ -176,6 +176,8 @@ object CameraHook {
         } catch (t: Throwable) {
             Log.e(TAG, "VirtuCam_Hook: Failed to hook CAM_Storage methods", t)
         }
+    }
+
     
     /**
      * [The Ultimate Safety Net]
