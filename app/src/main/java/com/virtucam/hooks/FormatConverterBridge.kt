@@ -343,41 +343,17 @@ class FormatConverterBridge(
             
             val jpegBytes = baos.toByteArray()
             
-            // Write Spoofed JPEG into the image buffer (just in case)
+            // NEW: Late-Stage Storage Interception Bypass!
+            // Store the perfectly spoofed JPEG in a global variable. When Xiaomi completes its Native 
+            // AlgoEngine processing, it will attempt to save its (likely corrupted) image to the disk.
+            // Our storage hook will decisively swap it out with this payload at the very last millisecond!
+            CameraHook.latestVirtualJpeg = jpegBytes
+            Log.d(TAG, "FormatConverterBridge: Captured and stored Virtual JPEG (${jpegBytes.size} bytes) for late-stage interception")
+            
+            // Write Spoofed JPEG into the image buffer (just in case the pipeline uses it directly)
             jpegBuffer.clear()
             val bytesToWrite = jpegBytes.size.coerceAtMost(jpegBuffer.capacity())
             jpegBuffer.put(jpegBytes, 0, bytesToWrite)
-            
-            // NEW: Hardware-Pipeline Bypass via Direct MediaStore Injection!
-            // If the Camera App created a PENDING MediaStore entry but won't fill it because
-            // we crippled its AlgoEngine, we step in and fill it ourselves!
-            val pendingUri = CameraHook.pendingCaptureUri
-            val resolver = CameraHook.pendingCaptureResolver
-            if (pendingUri != null && resolver != null) {
-                try {
-                    val outStream = resolver.openOutputStream(pendingUri)
-                    if (outStream != null) {
-                        outStream.write(jpegBytes)
-                        outStream.flush()
-                        outStream.close()
-                        Log.d(TAG, "VirtuCam_MediaStore: Successfully injected ${jpegBytes.size} bytes directly to $pendingUri")
-                        
-                        // Immediately unlock the photo for the Gallery
-                        val updateValues = android.content.ContentValues()
-                        updateValues.put("is_pending", 0)
-                        resolver.update(pendingUri, updateValues, null, null)
-                        Log.d(TAG, "VirtuCam_MediaStore: Instantly cleared IS_PENDING flag for $pendingUri. Photo is now visible!")
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "VirtuCam_MediaStore: Failed to inject JPEG into MediaStore", e)
-                } finally {
-                    // Consume the URI so we don't accidentally overwrite it later
-                    CameraHook.pendingCaptureUri = null
-                    CameraHook.pendingCaptureResolver = null
-                }
-            } else {
-                Log.w(TAG, "VirtuCam_MediaStore: No pending URI captured. Relying solely on ImageWriter buffer.")
-            }
             
             // Do NOT flip. We want the camera framework to read up to its native size.
             // Appending our naked JPEG without EXIF APP1 blocks is enough because modern 

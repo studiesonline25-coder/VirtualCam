@@ -57,9 +57,8 @@ object CameraHook {
     private val surfaceMap = mutableMapOf<Surface, Surface>()
     private val activeBridges = mutableListOf<FormatConverterBridge>()
     
-    // Global state for MediaStore hijacking
-    @Volatile var pendingCaptureUri: Uri? = null
-    @Volatile var pendingCaptureResolver: android.content.ContentResolver? = null
+    // Global state for Late-Stage Storage Interception
+    @Volatile var latestVirtualJpeg: ByteArray? = null
     
     // global capture state for render threads
     @Volatile var captureCount = 0
@@ -97,7 +96,7 @@ object CameraHook {
             hookCamera1(lpparam)
             hookCaptureCallback(lpparam)
             hookXiaomiBypass(lpparam)
-            hookContentResolver(lpparam)
+            hookXiaomiStorage(lpparam)
             
             Log.d(TAG, "VirtuCam_Hook: All hooks deployed successfully.")
         } catch (t: Throwable) {
@@ -106,65 +105,70 @@ object CameraHook {
     }
 
     /**
-     * Intercepts MediaStore insertions by the Camera app. When it creates a PENDING image,
-     * we capture the URI. This allows our virtual bridge to bypass broken algorithm engines
-     * by injecting the JPEG directly into the MediaStore and instantly unlocking it.
+     * [Late-Stage Storage Interception]
+     * Instead of fighting the MiAlgoEngine earlier in the pipeline or trying to hijack 
+     * early MediaStore URIs (which Xiaomi often deletes or overwrites), we let Xiaomi 
+     * run its entire native Camera process. Right before the final image is committed 
+     * from the cache to the permanent Gallery, we swap the payload with our spoofed JPEG.
      */
-    private fun hookContentResolver(lpparam: XC_LoadPackage.LoadPackageParam) {
+    private fun hookXiaomiStorage(lpparam: XC_LoadPackage.LoadPackageParam) {
+        val storageClass = XposedHelpers.findClassIfExists("com.android.camera.storage.Storage", lpparam.classLoader) ?: return
+
+        val replaceImageHook = object : XC_MethodHook() {
+            override fun beforeHookedMethod(param: MethodHookParam) {
+                try {
+                    if (!isEnabled) return
+                    val virtualJpeg = latestVirtualJpeg
+                    if (virtualJpeg == null) return
+
+                    var swapped = false
+                    for (i in param.args.indices) {
+                        val arg = param.args[i]
+                        
+                        // Scenario 1: The image is passed as a direct byte array
+                        if (arg is ByteArray && arg.size > 100000) { // arbitrary >100KB check to avoid tiny thumbnails
+                            param.args[i] = virtualJpeg
+                            swapped = true
+                            Log.w(TAG, "VirtuCam_Storage: BOOM! Successfully swapped MIVI ByteArray payload in ${param.method.name}()! Size: ${virtualJpeg.size}")
+                        }
+                        // Scenario 2: The image is passed as an absolute file path string (e.g. tmpPath)
+                        else if (arg is String && arg.endsWith(".jpg", true) && arg.contains("cache", true)) {
+                            val file = java.io.File(arg)
+                            if (file.exists() && file.canWrite()) {
+                                file.writeBytes(virtualJpeg)
+                                swapped = true
+                                Log.w(TAG, "VirtuCam_Storage: BOOM! Successfully overwrote MIVI Cache File payload in ${param.method.name}() at $arg! Size: ${virtualJpeg.size}")
+                            }
+                        }
+                        // Scenario 3: The image is passed as a File object
+                        else if (arg is java.io.File && arg.absolutePath.endsWith(".jpg", true) && arg.absolutePath.contains("cache", true)) {
+                            if (arg.exists() && arg.canWrite()) {
+                                arg.writeBytes(virtualJpeg)
+                                swapped = true
+                                Log.w(TAG, "VirtuCam_Storage: BOOM! Successfully overwrote MIVI Cache File object in ${param.method.name}() at ${arg.absolutePath}! Size: ${virtualJpeg.size}")
+                            }
+                        }
+                    }
+                    
+                    if (swapped) {
+                        // Clear the payload so we don't accidentally overwrite the NEXT photo with the SAME photo!
+                        latestVirtualJpeg = null
+                    }
+                } catch (t: Throwable) {
+                    Log.e(TAG, "VirtuCam_Storage: Hook execution failed in ${param.method.name}", t)
+                }
+            }
+        }
+
         try {
-            // 1. Hook 'insert' to capture the URI
-            XposedBridge.hookAllMethods(
-                android.content.ContentResolver::class.java,
-                "insert",
-                object : XC_MethodHook() {
-                    override fun afterHookedMethod(param: MethodHookParam) {
-                        try {
-                            if (!isEnabled) return
-                            val uri = param.args[0] as? Uri ?: return
-                            val resultUri = param.result as? Uri ?: return
-                            
-                            if (uri.toString().contains("media/external/images/media")) {
-                                val values = param.args.getOrNull(1) as? android.content.ContentValues
-                                val isPending = values?.getAsInteger("is_pending")
-                                
-                                // Xiaomi bypasses standard is_pending=1 logic, so we capture the latest URI regardless!
-                                Log.d(TAG, "VirtuCam_MediaStore: Captured MediaStore URI: $resultUri (isPending: $isPending)")
-                                pendingCaptureUri = resultUri
-                                pendingCaptureResolver = param.thisObject as? android.content.ContentResolver
-                            }
-                        } catch (t: Throwable) {
-                            Log.e(TAG, "VirtuCam_MediaStore: ContentResolver insert hook error", t)
-                        }
-                    }
-                }
-            )
-
-            // 2. Hook 'delete' to prevent the Camera app from cleaning up our injected photo 
-            // when its own internal MIVI/AlgoEngine pipeline fails and triggers a rollback.
-            XposedBridge.hookAllMethods(
-                android.content.ContentResolver::class.java,
-                "delete",
-                object : XC_MethodHook() {
-                    override fun beforeHookedMethod(param: MethodHookParam) {
-                        try {
-                            if (!isEnabled) return
-                            val uri = param.args[0] as? Uri ?: return
-                            
-                            val protectedUri = pendingCaptureUri
-                            if (protectedUri != null && uri == protectedUri) {
-                                Log.w(TAG, "VirtuCam_MediaStore: BLOCKED attempt by Camera app to delete injected photo: $uri")
-                                param.result = 0 // Return 0 rows deleted, successfully spoofing a no-op
-                            }
-                        } catch (t: Throwable) {
-                            Log.e(TAG, "VirtuCam_MediaStore: ContentResolver delete hook error", t)
-                        }
-                    }
-                }
-            )
-
-            Log.d(TAG, "VirtuCam_Hook: ContentResolver hooks active (Insert & Delete protected)")
+            // Hook all variations of saving methods natively used by Xiaomi CAM_Storage
+            XposedBridge.hookAllMethods(storageClass, "updateImage", replaceImageHook)
+            XposedBridge.hookAllMethods(storageClass, "updateAllowingReplace", replaceImageHook)
+            XposedBridge.hookAllMethods(storageClass, "addImage", replaceImageHook)
+            
+            Log.d(TAG, "VirtuCam_Hook: Storage Interception hooks active. Awaiting MiAlgoEngine completion.")
         } catch (t: Throwable) {
-            Log.e(TAG, "VirtuCam_Hook: Failed to hook ContentResolver", t)
+            Log.e(TAG, "VirtuCam_Hook: Failed to hook CAM_Storage methods", t)
         }
     }
 
