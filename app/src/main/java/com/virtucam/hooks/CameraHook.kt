@@ -1461,9 +1461,9 @@ class VirtualRenderThread(
                 eglCore!!.makeCurrent(es)
                 val vw = eglCore!!.querySurface(es, android.opengl.EGL14.EGL_WIDTH)
                 val vh = eglCore!!.querySurface(es, android.opengl.EGL14.EGL_HEIGHT)
-                // Draw the frame
-            // OBS feed is already display-oriented. No rotation needed for any surface.
-            textureRenderer?.draw(matrix, contentW, contentH, vw, vh, getTargetRatio(vw, vh, isCapture), 0, userRotation, CameraHook.isMirrored, CameraHook.zoomFactor)
+            // Draw the frame
+            val applyRotation = if (isCapture) sensorOrientation else 0
+            textureRenderer?.draw(matrix, contentW, contentH, vw, vh, getTargetRatio(vw, vh, isCapture), applyRotation, userRotation, CameraHook.isMirrored, CameraHook.zoomFactor)
             
             if (eglCore?.swapBuffers(es) == false) {
                     Log.w("VirtuCam_Render", "Surface abandoned, removing.")
