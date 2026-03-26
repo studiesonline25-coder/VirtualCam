@@ -169,8 +169,10 @@ object CameraHook {
                     }
                     
                     if (swapped) {
-                        // Clear the payload so we don't accidentally overwrite the NEXT photo with the SAME photo!
-                        latestVirtualJpeg = null
+                        // Delay clearing: Xiaomi may call multiple save methods sequentially
+                        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                            latestVirtualJpeg = null
+                        }, 2000)
                     }
                 } catch (t: Throwable) {
                     Log.e(TAG, "VirtuCam_Storage: Hook execution failed in ${param.method.name}", t)
@@ -238,7 +240,10 @@ object CameraHook {
                         if (data.size > 100000) { // >100KB
                              param.args[0] = virtualJpeg
                              Log.w(TAG, "VirtuCam_Storage: FileOutputStream.write() SWAPPED successfully!")
-                             latestVirtualJpeg = null // Clear to avoid reuse
+                             // Delay clearing: Xiaomi may trigger multiple write paths
+                             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                                 latestVirtualJpeg = null
+                             }, 2000)
                         }
                     } catch (_: Throwable) {}
                 }
