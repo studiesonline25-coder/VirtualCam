@@ -1420,7 +1420,7 @@ class VirtualRenderThread(
                     }
                     
                     if (es != null) {
-                        Log.d("VirtuCam_Render", "Created EGL surface for target: ${targetPair.first}")
+                        Log.d("VirtuCam_Render", "Created EGL surface for target: ${targetTriple.first}")
                     }
                 } catch (e: Exception) {
                     Log.e("VirtuCam_Render", "Failed to create EGL surface for target (skipping): ${e.message}")
