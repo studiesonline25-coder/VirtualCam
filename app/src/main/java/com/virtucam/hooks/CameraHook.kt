@@ -1047,6 +1047,14 @@ object CameraHook {
                             
                             stopOldPipeline()
                             
+                            // Force fetch active cameraId facing
+                            try {
+                                val manager = AndroidAppHelper.currentApplication().getSystemService(android.content.Context.CAMERA_SERVICE) as android.hardware.camera2.CameraManager
+                                val characteristics = manager.getCameraCharacteristics(activeCameraId)
+                                val facing = characteristics.get(android.hardware.camera2.CameraCharacteristics.LENS_FACING)
+                                if (facing != null) cameraFacings[activeCameraId] = facing
+                            } catch (_: Exception) {}
+
                             val newSurfaces = ArrayList<Surface>()
                             val targetSurfaces = ArrayList<Pair<Surface, Boolean>>()
                             
@@ -1473,25 +1481,30 @@ class VirtualRenderThread(
     private fun drawToAllSurfaces(matrix: FloatArray, contentW: Int, contentH: Int): Boolean {
         val it = eglSurfaceTargets.iterator()
         while (it.hasNext()) {
-            val (es, isCapture, format) = it.next()
+            val it_triple = it.next()
+            val es = it_triple.first
+            val isCapture = it_triple.second
+            val format = it_triple.third
             try {
                 eglCore!!.makeCurrent(es)
                  val vw = eglCore!!.querySurface(es, android.opengl.EGL14.EGL_WIDTH)
                  val vh = eglCore!!.querySurface(es, android.opengl.EGL14.EGL_HEIGHT)
                  
                  // DYNAMIC ORIENTATION LOGIC
-                 // If it's a real photo/video (JPEG or Recorder), match the perfect upright preview (0).
-                 // If it's YUV/PRIVATE, Veriff expects physical sensor orientation (baseline).
+                 // 0x100=JPEG, 0=Recorder (Dynamic Switch to 0 for storage)
                  val applyRotation = if (isCapture) {
-                     if (format == ImageFormat.JPEG || format == 0) 0 else sensorOrientation
+                     if (format == 0x100 || format == 0) 0 else sensorOrientation
                  } else {
                      0
                  }
 
-                 // DYNAMIC MIRRORING LOGIC
-                 // ImageReaders (Veriff) don't mirror naturally. Native previews do.
-                 val shouldMirror = if (isFrontCamera) {
-                     (format == ImageFormat.YUV_420_888 || format == ImageFormat.NV21 || format == ImageFormat.JPEG)
+                 // DYNAMIC MIRRORING LOGIC (The "Veriff" Fix)
+                 // Some apps (Veriff) skip preview mirroring. Native cameras mirror in UI.
+                 // Sense Front-Camera: If isFrontCamera property is true OR sensorOrientation is 270 (Common Front-Cam).
+                 val isActuallyFront = isFrontCamera || sensorOrientation == 270
+                 val shouldMirror = if (isActuallyFront) {
+                     // Mirror ImageReaders (Veriff preview/capture) so text is not backwards.
+                     (format == 35 || format == 34 || format == 0x100)
                  } else {
                      false
                  }
