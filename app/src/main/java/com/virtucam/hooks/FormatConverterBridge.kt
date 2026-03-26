@@ -159,10 +159,12 @@ class FormatConverterBridge(
         var baseRotation = sensorOrientation
         if (targetIsLandscape != sourceIsLandscape) {
             // Force a 90-degree compensation if orientations mismatch
-            // baseRotation = (baseRotation + 90) % 360
+            // This fixes the "sideways in browser" issue identified in your audio!
+            baseRotation = (baseRotation + 90) % 360
         }
 
         val totalRotation = (baseRotation + rotationOffset) % 360
+
 
             val tgtW = w.toFloat()
             val tgtH = h.toFloat()
