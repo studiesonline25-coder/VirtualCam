@@ -169,8 +169,10 @@ object CameraHook {
                     }
                     
                     if (swapped) {
-                        // Clear the payload so we don't accidentally overwrite the NEXT photo with the SAME photo!
-                        latestVirtualJpeg = null
+                        // Delay clearing: Xiaomi may call multiple save methods sequentially
+                        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                            latestVirtualJpeg = null
+                        }, 2000)
                     }
                 } catch (t: Throwable) {
                     Log.e(TAG, "VirtuCam_Storage: Hook execution failed in ${param.method.name}", t)
@@ -238,7 +240,10 @@ object CameraHook {
                         if (data.size > 100000) { // >100KB
                              param.args[0] = virtualJpeg
                              Log.w(TAG, "VirtuCam_Storage: FileOutputStream.write() SWAPPED successfully!")
-                             latestVirtualJpeg = null // Clear to avoid reuse
+                             // Delay clearing: Xiaomi may trigger multiple write paths
+                             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                                 latestVirtualJpeg = null
+                             }, 2000)
                         }
                     } catch (_: Throwable) {}
                 }
@@ -1457,8 +1462,8 @@ class VirtualRenderThread(
                 val vw = eglCore!!.querySurface(es, android.opengl.EGL14.EGL_WIDTH)
                 val vh = eglCore!!.querySurface(es, android.opengl.EGL14.EGL_HEIGHT)
                 // Draw the frame
-            val applyRotation = if (isCapture) sensorOrientation else 0
-            textureRenderer?.draw(matrix, contentW, contentH, vw, vh, getTargetRatio(vw, vh, isCapture), applyRotation, userRotation, CameraHook.isMirrored, CameraHook.zoomFactor)
+            // OBS feed is already display-oriented. No rotation needed for any surface.
+            textureRenderer?.draw(matrix, contentW, contentH, vw, vh, getTargetRatio(vw, vh, isCapture), 0, userRotation, CameraHook.isMirrored, CameraHook.zoomFactor)
             
             if (eglCore?.swapBuffers(es) == false) {
                     Log.w("VirtuCam_Render", "Surface abandoned, removing.")
