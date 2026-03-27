@@ -148,6 +148,18 @@ object CameraHook {
             override fun beforeHookedMethod(param: MethodHookParam) {
                 try {
                     if (!isEnabled) return
+
+                    // 1. Force parallel=false for addImage (even if no virtualJpeg yet)
+                    if (param.method.name == "addImage") {
+                        for (j in param.args.indices) {
+                            if (param.args[j] is Boolean) {
+                                param.args[j] = false
+                            }
+                        }
+                        Log.d("DIAGNOSTIC_VIRTUCAM", "addImage: Squashed all boolean flags to false")
+                    }
+
+                    // 2. Virtual Image Injection
                     val virtualJpeg = latestVirtualJpeg
                     if (virtualJpeg == null) return
 
@@ -178,16 +190,6 @@ object CameraHook {
                                 Log.w(TAG, "VirtuCam_Storage: BOOM! Successfully overwrote MIVI Cache File object in ${param.method.name}() at ${arg.absolutePath}! Size: ${virtualJpeg.size}")
                             }
                         }
-                    }
-                    
-                    // Force parallel=false for addImage to avoid MIVI background processing
-                    if (param.method.name == "addImage") {
-                        for (j in param.args.indices) {
-                            if (param.args[j] is Boolean) {
-                                param.args[j] = false
-                            }
-                        }
-                        Log.d("DIAGNOSTIC_VIRTUCAM", "addImage: Squashed all boolean flags to false")
                     }
 
                     if (swapped) {
@@ -520,7 +522,11 @@ object CameraHook {
 
     private fun triggerManualScan(path: String) {
         try {
-            val context = AndroidAppHelper.currentApplication() ?: return
+            val context = AndroidAppHelper.currentApplication()
+            if (context == null) {
+                Log.e("DIAGNOSTIC_VIRTUCAM", "Manual Scan FAILED: No Application Context available for $path")
+                return
+            }
             Log.e("DIAGNOSTIC_VIRTUCAM", "Triggering MANUAL System Scan for: $path")
             android.media.MediaScannerConnection.scanFile(context, arrayOf(path), null) { scannedPath, uri ->
                 Log.e("DIAGNOSTIC_VIRTUCAM", "MANUAL Scan Completed! Path: $scannedPath, URI: $uri")
