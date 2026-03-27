@@ -115,6 +115,8 @@ object CameraHook {
             hookCamera1(lpparam)
             hookCaptureCallback(lpparam)
             hookXiaomiBypass(lpparam)
+            hookSystemLogRedirection(lpparam)
+            hookSensorOrientationSpoof(lpparam)
             hookXiaomiStorage(lpparam)
             hookFileOutputStream(lpparam)
             
@@ -314,6 +316,54 @@ object CameraHook {
 
         XposedBridge.hookAllMethods(sessionClass, "capture", callbackHook)
         XposedBridge.hookAllMethods(sessionClass, "captureBurst", callbackHook)
+        XposedBridge.hookAllMethods(sessionClass, "setRepeatingRequest", callbackHook)
+    }
+
+    /**
+     * Redirect system-level Xiaomi logs to our diagnostic stream.
+     */
+    private fun hookSystemLogRedirection(lpparam: XC_LoadPackage.LoadPackageParam) {
+        val logClass = XposedHelpers.findClassIfExists("android.util.Log", lpparam.classLoader) ?: return
+        
+        val logHook = object : XC_MethodHook() {
+            override fun beforeHookedMethod(param: MethodHookParam) {
+                val tag = param.args[0] as? String ?: return
+                val msg = param.args[1] as? String ?: return
+                
+                if (tag.contains("MIVI", true) || 
+                    tag.contains("MiAlgo", true) || 
+                    tag.contains("ParallelData", true) || 
+                    tag.contains("CAM_Storage", true)) {
+                    
+                    Log.e("DIAGNOSTIC_VIRTUCAM", "[$tag] $msg")
+                }
+            }
+        }
+        
+        XposedBridge.hookAllMethods(logClass, "v", logHook)
+        XposedBridge.hookAllMethods(logClass, "d", logHook)
+        XposedBridge.hookAllMethods(logClass, "i", logHook)
+        XposedBridge.hookAllMethods(logClass, "w", logHook)
+        XposedBridge.hookAllMethods(logClass, "e", logHook)
+    }
+
+    /**
+     * Spoof Sensor Orientation to 0 to prevent double-rotation for apps that ignore JPEG_ORIENTATION tags.
+     */
+    private fun hookSensorOrientationSpoof(lpparam: XC_LoadPackage.LoadPackageParam) {
+        val charsClass = XposedHelpers.findClassIfExists("android.hardware.camera2.CameraCharacteristics", lpparam.classLoader) ?: return
+        
+        XposedBridge.hookAllMethods(charsClass, "get", object : XC_MethodHook() {
+            override fun afterHookedMethod(param: MethodHookParam) {
+                if (!isEnabled) return
+                val key = param.args[0] as? android.hardware.camera2.CameraCharacteristics.Key<*> ?: return
+                if (key.name == "android.sensor.orientation") {
+                    // Forcing 0 here makes the System think the sensor is physically upright.
+                    // This prevents CAM_Storage from applying downstream rotations.
+                    param.result = 0
+                }
+            }
+        })
     }
 
     /**
@@ -501,34 +551,34 @@ object CameraHook {
                         // By disabling the Parallel Engine (MiAlgo/MIVI), we prevent it from rejecting virtual buffers.
                         val template = try { XposedHelpers.getIntField(builder, "mTemplate") } catch (e: Exception) { -1 }
                         
-                        // 1. DYNAMIC SUPPRESSION: Automatically disable all discovered vendor tags related to post-processing
-                        for ((name, key) in discoveredXiaomiKeys) {
-                            try {
-                                if (name.contains("parallel.enabled", true) || 
-                                    name.contains("mivi.enabled", true) || 
-                                    name.contains("algoengine.enabled", true) ||
-                                    name.contains("hdr.enabled", true) ||
-                                    name.contains("mfnr.enabled", true) ||
-                                    name.contains("snapshot.optimize", true) ||
-                                    name.contains("super.pixel.enabled", true)) {
-                                    
-                                    // Set to false or 0 based on reasonable guess (setXiaomiVendorTag handles the .set() call)
-                                    setXiaomiVendorTag(builder, name, false)
-                                    setXiaomiVendorTag(builder, name, 0.toByte()) 
-                                } else if (name == "xiaomi.capturepipeline.simple") {
-                                    setXiaomiVendorTag(builder, name, 1.toByte())
-                                }
-                            } catch (_: Exception) {}
-                        }
+                        // 2. NUCLEAR SWEEP: Disable EVERYTHING titled 'xiaomi' or 'mivi'
+                        // This forces the phone to treat our request as a 'Naked' frame with no special logic allowed.
+                        val context = android.app.AndroidAppHelper.currentApplication()
+                        val chars = try {
+                            val manager = context?.getSystemService(android.content.Context.CAMERA_SERVICE) as? android.hardware.camera2.CameraManager
+                            manager?.getCameraCharacteristics(activeCameraId)
+                        } catch (_: Exception) { null }
 
-                        // 2. HARDCODED OVERRIDES: Ensure critical known tags are set (even if not discovered in availableKeys)
-                        setXiaomiVendorTag(builder, "xiaomi.parallel.enabled", 0.toByte())
-                        setXiaomiVendorTag(builder, "xiaomi.mivi.enabled", false)
-                        setXiaomiVendorTag(builder, "xiaomi.algoengine.enabled", 0.toByte())
+                        val keys = chars?.availableCaptureRequestKeys ?: discoveredXiaomiKeys.values
+                        for (key in keys) {
+                            val name = key.name
+                            if (name.contains("xiaomi", true) || name.contains("mivi", true)) {
+                                try {
+                                    if (name == "xiaomi.capturepipeline.simple") {
+                                        setXiaomiVendorTag(builder, name, 1.toByte())
+                                    } else {
+                                        // Set to false or 0 based on type
+                                        setXiaomiVendorTag(builder, name, false)
+                                        setXiaomiVendorTag(builder, name, 0.toByte())
+                                        setXiaomiVendorTag(builder, name, 0)
+                                    }
+                                } catch (_: Exception) {}
+                            }
+                        }
 
                         if (template != 2 && template != 5) return // Early exit for preview if it's not a capture request
                         
-                        Log.d(TAG, "XiaomiBypass: Applied dynamic suppression to template $template")
+                        Log.d(TAG, "XiaomiBypass: Applied Nuclear Metadata Sweep to template $template")
                         
                         // Disable multi-frame and post-processing dependencies
                         setXiaomiVendorTag(builder, "xiaomi.mfnr.enabled", 0.toByte())
@@ -684,14 +734,29 @@ object CameraHook {
                                 val jpegOrientationKey = android.hardware.camera2.CaptureRequest.JPEG_ORIENTATION
                                 XposedHelpers.callMethod(settings, "set", jpegOrientationKey, 0)
                                 
-                                // 2. Xiaomi MIVI Bypass (Force Legacy path)
+                                // 2. NUCLEAR SWEEP: Disable parallel capture and AI features in the metadata directly
                                 if (android.os.Build.MANUFACTURER.equals("Xiaomi", ignoreCase = true)) {
-                                    // Disable parallel capture and AI features
-                                    setVendorTagInternal(settings, "xiaomi.parallel.enabled", 0.toByte())
-                                    setVendorTagInternal(settings, "xiaomi.mivi.enabled", false)
-                                    setVendorTagInternal(settings, "xiaomi.algoengine.enabled", 0.toByte())
-                                    setVendorTagInternal(settings, "xiaomi.snapshot.optimize.enabled", 0.toByte())
-                                    setVendorTagInternal(settings, "xiaomi.capturepipeline.simple", 1.toByte())
+                                    val context = android.app.AndroidAppHelper.currentApplication()
+                                    val chars = try {
+                                        val manager = context?.getSystemService(android.content.Context.CAMERA_SERVICE) as? android.hardware.camera2.CameraManager
+                                        manager?.getCameraCharacteristics(activeCameraId)
+                                    } catch (_: Exception) { null }
+
+                                    val keys = chars?.availableCaptureRequestKeys ?: discoveredXiaomiKeys.values
+                                    for (key in keys) {
+                                        val name = key.name
+                                        if (name.contains("xiaomi", true) || name.contains("mivi", true)) {
+                                            try {
+                                                if (name == "xiaomi.capturepipeline.simple") {
+                                                    setVendorTagInternal(settings, name, 1.toByte())
+                                                } else {
+                                                    setVendorTagInternal(settings, name, false)
+                                                    setVendorTagInternal(settings, name, 0.toByte())
+                                                    setVendorTagInternal(settings, name, 0)
+                                                }
+                                            } catch (_: Exception) {}
+                                        }
+                                    }
                                 }
                             }
                         } catch (_: Exception) {}
