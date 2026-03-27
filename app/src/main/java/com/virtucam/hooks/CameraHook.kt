@@ -119,6 +119,8 @@ object CameraHook {
             hookSensorOrientationSpoof(lpparam)
             hookXiaomiStorage(lpparam)
             hookFileOutputStream(lpparam)
+            hookFilePathNormalization(lpparam)
+            hookExifInterface(lpparam)
             
             Log.d(TAG, "VirtuCam_Hook: All hooks deployed successfully.")
         } catch (t: Throwable) {
@@ -195,6 +197,69 @@ object CameraHook {
             Log.e(TAG, "VirtuCam_Hook: Failed to hook CAM_Storage methods", t)
         }
     }
+    
+    /**
+     * [Storage Redirection Fix]
+     * In some environments (LSPatch/VirtualApp), the camera's DCIM path is redirected to an internal OBB folder.
+     * The system Gallery scanner does NOT check OBB folders, causing photos to "disappear".
+     * We strip this redirection prefix to force the file into the real public DCIM folder.
+     */
+    private fun hookFilePathNormalization(lpparam: XC_LoadPackage.LoadPackageParam) {
+        val fileClass = java.io.File::class.java
+        XposedBridge.hookAllConstructors(fileClass, object : XC_MethodHook() {
+            override fun beforeHookedMethod(param: MethodHookParam) {
+                if (param.args.isEmpty()) return
+                val firstArg = param.args[0]
+                if (firstArg is String) {
+                    val originalPath = firstArg
+                    if (originalPath.contains("scopedStorage", ignoreCase = true) && originalPath.contains("DCIM/Camera", ignoreCase = true)) {
+                        val dcimIndex = originalPath.indexOf("DCIM/Camera")
+                        if (dcimIndex > 0) {
+                            val newPath = "/storage/emulated/0/" + originalPath.substring(dcimIndex)
+                            param.args[0] = newPath
+                            Log.e("DIAGNOSTIC_VIRTUCAM", "Storage Normalization: Stripped OEM Redirect! $originalPath -> $newPath")
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    /**
+     * [The "Final Boss" Metadata Override]
+     * Force ALL orientation reads (android.media and androidx) to return 1 (Normal).
+     * This ensures the gallery never rotates our already-upright pixels.
+     */
+    private fun hookExifInterface(lpparam: XC_LoadPackage.LoadPackageParam) {
+        val exifClasses = listOf(
+            "android.media.ExifInterface",
+            "androidx.exifinterface.media.ExifInterface"
+        )
+        
+        val orientationHook = object : XC_MethodHook() {
+            override fun afterHookedMethod(param: MethodHookParam) {
+                if (!isEnabled) return
+                val attrName = param.args[0] as? String ?: return
+                if (attrName == "Orientation" || attrName == "android:Orientation") {
+                    if (param.method.name == "getAttributeInt") {
+                        param.result = 1
+                    } else if (param.method.name == "getAttribute") {
+                        param.result = "1"
+                    }
+                    Log.v("DIAGNOSTIC_VIRTUCAM", "ExifInterface: Successfully spoofed Orientation to 1 (Normal)")
+                }
+            }
+        }
+
+        for (className in exifClasses) {
+            try {
+                val clazz = XposedHelpers.findClassIfExists(className, lpparam.classLoader) ?: continue
+                XposedBridge.hookAllMethods(clazz, "getAttributeInt", orientationHook)
+                XposedBridge.hookAllMethods(clazz, "getAttribute", orientationHook)
+                Log.d(TAG, "ExifInterface Hook: Deployed for $className")
+            } catch (_: Throwable) {}
+        }
+    }
 
     
     /**
@@ -212,8 +277,15 @@ object CameraHook {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     try {
                         if (!isEnabled) return
+                        val arg = param.args[0]
+                        if (arg is String) {
+                            if (arg.contains("scopedStorage", true) && arg.contains("DCIM/Camera", true)) {
+                                val idx = arg.indexOf("DCIM/Camera")
+                                if (idx > 0) param.args[0] = "/storage/emulated/0/" + arg.substring(idx)
+                            }
+                        }
                         val virtualJpeg = latestVirtualJpeg ?: return
-                        val file = param.args[0] as? java.io.File ?: return
+                        val file = if (arg is java.io.File) arg else if (arg is String) java.io.File(arg) else return
                         val path = file.absolutePath
                         
                         // Only intercept if it looks like a camera capture artifact
@@ -588,6 +660,9 @@ object CameraHook {
                         setXiaomiVendorTag(builder, "xiaomi.mivi.super.pixel.enabled", false)
                         setXiaomiVendorTag(builder, "xiaomi.mivi.super.night.enabled", false)
                         setXiaomiVendorTag(builder, "xiaomi.capturepipeline.simple", 1.toByte())
+                        setXiaomiVendorTag(builder, "xiaomi.parallel.enabled", 0.toByte())
+                        setXiaomiVendorTag(builder, "xiaomi.mivi.enabled", false)
+                        setXiaomiVendorTag(builder, "xiaomi.algo.enabled", false)
                         setXiaomiVendorTag(builder, "xiaomi.sat.enabled", 0.toByte())
                         
                     } catch (_: Throwable) {}
@@ -757,6 +832,12 @@ object CameraHook {
                                             } catch (_: Exception) {}
                                         }
                                     }
+                                    
+                                    // Hardcoded Forced Sync Path
+                                    setVendorTagInternal(settings, "xiaomi.parallel.enabled", 0.toByte())
+                                    setVendorTagInternal(settings, "xiaomi.mivi.enabled", false)
+                                    setVendorTagInternal(settings, "xiaomi.algo.enabled", false)
+                                    setVendorTagInternal(settings, "xiaomi.capturepipeline.simple", 1.toByte())
                                 }
                             }
                         } catch (_: Exception) {}
