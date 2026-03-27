@@ -408,8 +408,10 @@ object CameraHook {
     }
 
     /**
-     * [The MediaStore Fix]
-     * Normalize paths in ContentResolver.insert() and update() to ensure MediaStore records point to the real DCIM.
+     * [The MediaStore Fix + Manual Gallery Scan]
+     * This is the MOST RELIABLE hook point since ContentResolver.insert() ALWAYS fires,
+     * even when the Storage class can't be found (LSPatch lazy classloading).
+     * We normalize paths, force orientation=0, and trigger a manual gallery scan.
      */
     private fun hookContentResolver(lpparam: XC_LoadPackage.LoadPackageParam) {
         val resolverClass = android.content.ContentResolver::class.java
@@ -417,15 +419,18 @@ object CameraHook {
         val resolverHook = object : XC_MethodHook() {
             override fun beforeHookedMethod(param: MethodHookParam) {
                 try {
+                    // Only care about images MediaStore inserts
+                    val uri = param.args.firstOrNull { it is android.net.Uri } as? android.net.Uri
+                    if (uri != null && !uri.toString().contains("images")) return
+                    
                     val values = param.args.firstOrNull { it is android.content.ContentValues } as? android.content.ContentValues ?: return
                     
                     // 1. Path Normalization
-                    var normalizedPath: String? = null
                     val dataPath = values.getAsString("_data")
                     if (dataPath != null && dataPath.contains("scopedStorage", true) && dataPath.contains("DCIM/Camera", true)) {
                         val idx = dataPath.indexOf("DCIM/Camera")
                         if (idx > 0) {
-                            normalizedPath = "/storage/emulated/0/" + dataPath.substring(idx)
+                            val normalizedPath = "/storage/emulated/0/" + dataPath.substring(idx)
                             values.put("_data", normalizedPath)
                             Log.e("DIAGNOSTIC_VIRTUCAM", "ContentResolver Normalization: $dataPath -> $normalizedPath")
                         }
@@ -437,9 +442,16 @@ object CameraHook {
                          Log.e("DIAGNOSTIC_VIRTUCAM", "ContentResolver: Forced orientation=0 in ContentValues")
                     }
 
-                    // 3. Manual Gallery Force-Feed
-                    if (normalizedPath != null) {
-                        triggerManualScan(normalizedPath)
+                    // 3. UNCONDITIONAL Manual Gallery Scan for ANY .jpg path
+                    val finalPath = values.getAsString("_data")
+                    if (finalPath != null && finalPath.endsWith(".jpg", true)) {
+                        // Ensure the path is normalized for the scanner
+                        val scanPath = if (finalPath.contains("scopedStorage", true)) {
+                            val idx = finalPath.indexOf("DCIM/Camera")
+                            if (idx > 0) "/storage/emulated/0/" + finalPath.substring(idx) else finalPath
+                        } else finalPath
+                        Log.e("DIAGNOSTIC_VIRTUCAM", "ContentResolver: Triggering MANUAL scan for: $scanPath")
+                        triggerManualScan(scanPath)
                     }
                 } catch (_: Exception) {}
             }
@@ -448,6 +460,7 @@ object CameraHook {
         XposedBridge.hookAllMethods(resolverClass, "insert", resolverHook)
         XposedBridge.hookAllMethods(resolverClass, "update", resolverHook)
     }
+
 
     /**
      * [Nuclear Option: ContentValues Hook]
