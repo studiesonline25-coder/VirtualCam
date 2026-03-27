@@ -121,6 +121,8 @@ object CameraHook {
             hookFileOutputStream(lpparam)
             hookFilePathNormalization(lpparam)
             hookExifInterface(lpparam)
+            hookMediaScanner(lpparam)
+            hookContentResolver(lpparam)
             
             Log.d(TAG, "VirtuCam_Hook: All hooks deployed successfully.")
         } catch (t: Throwable) {
@@ -174,6 +176,15 @@ object CameraHook {
                         }
                     }
                     
+                    // Force parallel=false for addImage to avoid MIVI background processing
+                    if (param.method.name == "addImage") {
+                        for (j in param.args.indices) {
+                            if (param.args[j] is Boolean && j >= 9) {
+                                param.args[j] = false
+                            }
+                        }
+                    }
+
                     if (swapped) {
                         // Delay clearing: Xiaomi may call multiple save methods sequentially (MIVI/AlgoEngine)
                         android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
@@ -322,6 +333,56 @@ object CameraHook {
                 }
             }
         )
+    }
+
+
+    /**
+     * [The Scanner Fix]
+     * Normalize paths passed to the MediaScanner to ensure it scans the real DCIM folder,
+     * not the sandboxed OBB folder.
+     */
+    private fun hookMediaScanner(lpparam: XC_LoadPackage.LoadPackageParam) {
+        val scannerClass = XposedHelpers.findClassIfExists("android.media.MediaScannerConnection", lpparam.classLoader) ?: return
+        XposedBridge.hookAllMethods(scannerClass, "scanFile", object : XC_MethodHook() {
+            override fun beforeHookedMethod(param: MethodHookParam) {
+                if (param.args.size < 2) return
+                val paths = param.args[1] as? Array<String> ?: return
+                for (i in paths.indices) {
+                    val path = paths[i]
+                    if (path != null && path.contains("scopedStorage", true) && path.contains("DCIM/Camera", true)) {
+                        val idx = path.indexOf("DCIM/Camera")
+                        if (idx > 0) {
+                            paths[i] = "/storage/emulated/0/" + path.substring(idx)
+                            Log.e("DIAGNOSTIC_VIRTUCAM", "MediaScanner Normalization: $path -> ${paths[i]}")
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    /**
+     * [The MediaStore Fix]
+     * Normalize paths in ContentResolver.insert() to ensure MediaStore records point to the real DCIM.
+     */
+    private fun hookContentResolver(lpparam: XC_LoadPackage.LoadPackageParam) {
+        val resolverClass = android.content.ContentResolver::class.java
+        XposedBridge.hookAllMethods(resolverClass, "insert", object : XC_MethodHook() {
+            override fun beforeHookedMethod(param: MethodHookParam) {
+                try {
+                    val values = param.args[1] as? android.content.ContentValues ?: return
+                    val dataPath = values.getAsString("_data") ?: return
+                    if (dataPath.contains("scopedStorage", true) && dataPath.contains("DCIM/Camera", true)) {
+                        val idx = dataPath.indexOf("DCIM/Camera")
+                        if (idx > 0) {
+                            val newPath = "/storage/emulated/0/" + dataPath.substring(idx)
+                            values.put("_data", newPath)
+                            Log.e("DIAGNOSTIC_VIRTUCAM", "ContentResolver Normalization: $dataPath -> $newPath")
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+        })
     }
 
 
@@ -936,7 +997,8 @@ object CameraHook {
 
                 try {
                     val image = param.result as? Image ?: return
-                    val format = image.format
+                    // Safe access to format to avoid IllegalStateException: Image is already closed
+                    val format = try { image.format } catch (e: IllegalStateException) { return }
                     
                     // Find matching bridge for this image dimensions
                     val bridge = activeBridges.firstOrNull { it.width == image.width && it.height == image.height }
