@@ -117,7 +117,7 @@ object CameraHook {
             hookXiaomiBypass(lpparam)
             hookSystemLogRedirection(lpparam)
             hookSensorOrientationSpoof(lpparam)
-            hookXiaomiStorage(lpparam)
+            hookLazyClasses(lpparam) // Replaces hookXiaomiStorage and hookXiaomiParallelDeep
             hookFileOutputStream(lpparam)
             hookFilePathNormalization(lpparam)
             hookExifInterface(lpparam)
@@ -125,7 +125,6 @@ object CameraHook {
             hookContentResolver(lpparam)
             hookContentValues(lpparam)
             hookBroadcastIntents(lpparam)
-            hookXiaomiParallelDeep(lpparam)
             hookFileDeletionGuard(lpparam)
             
             Log.d(TAG, "VirtuCam_Hook: All hooks deployed successfully.")
@@ -141,17 +140,43 @@ object CameraHook {
      * run its entire native Camera process. Right before the final image is committed 
      * from the cache to the permanent Gallery, we swap the payload with our spoofed JPEG.
      */
-    private fun hookXiaomiStorage(lpparam: XC_LoadPackage.LoadPackageParam) {
-        val storageClass = XposedHelpers.findClassIfExists("com.android.camera.storage.Storage", lpparam.classLoader)
-        if (storageClass == null) {
-            Log.e("DIAGNOSTIC_VIRTUCAM", "STORAGE HOOK FAILED: com.android.camera.storage.Storage class NOT FOUND!")
-            return
-        }
+    private fun hookLazyClasses(lpparam: XC_LoadPackage.LoadPackageParam) {
+        val classLoaderClass = ClassLoader::class.java
+        val hookedClasses = mutableSetOf<String>()
 
-        // [DIAGNOSTIC] Enumerate ALL methods on the Storage class
+        XposedBridge.hookAllMethods(classLoaderClass, "loadClass", object : XC_MethodHook() {
+            override fun afterHookedMethod(param: MethodHookParam) {
+                if (!isEnabled) return
+                val className = param.args[0] as? String ?: return
+                if (hookedClasses.contains(className)) return
+
+                val clazz = param.result as? Class<*> ?: return
+
+                when (className) {
+                    "com.android.camera.storage.Storage" -> {
+                        hookedClasses.add(className)
+                        Log.e("DIAGNOSTIC_VIRTUCAM", "LAZY HOOK SUCCESS: Found com.android.camera.storage.Storage!")
+                        applyStorageHooks(clazz)
+                    }
+                    "com.android.camera.ParallelTaskData" -> {
+                        hookedClasses.add(className)
+                        Log.e("DIAGNOSTIC_VIRTUCAM", "LAZY HOOK SUCCESS: Found com.android.camera.ParallelTaskData!")
+                        applyParallelTaskDataHooks(clazz)
+                    }
+                    "com.android.camera.module.loader.camera2.AlgorithmManager" -> {
+                        hookedClasses.add(className)
+                        Log.e("DIAGNOSTIC_VIRTUCAM", "LAZY HOOK SUCCESS: Found AlgorithmManager!")
+                        applyAlgorithmManagerHooks(clazz)
+                    }
+                }
+            }
+        })
+    }
+
+    private fun applyStorageHooks(storageClass: Class<*>) {
         try {
             val methods = storageClass.declaredMethods
-            Log.e("DIAGNOSTIC_VIRTUCAM", "Storage class found! Total declared methods: ${methods.size}")
+            Log.e("DIAGNOSTIC_VIRTUCAM", "Storage class loaded! Total declared methods: ${methods.size}")
             for (m in methods) {
                 val paramTypes = m.parameterTypes.joinToString(", ") { it.simpleName }
                 Log.e("DIAGNOSTIC_VIRTUCAM", "  Storage method: ${m.name}($paramTypes) -> ${m.returnType.simpleName}")
@@ -499,6 +524,10 @@ object CameraHook {
                     
                     Log.e("DIAGNOSTIC_VIRTUCAM", "ContentResolver INSERT returned URI: $resultUri")
                     
+                    // Extract _display_name directly from the ContentValues in args
+                    val values = param.args.firstOrNull { it is android.content.ContentValues } as? android.content.ContentValues
+                    val displayName = values?.getAsString("_display_name")
+                    
                     val context = de.robv.android.xposed.XposedHelpers.callStaticMethod(
                         Class.forName("android.app.ActivityThread"),
                         "currentApplication"
@@ -511,47 +540,35 @@ object CameraHook {
                         Log.e("DIAGNOSTIC_VIRTUCAM", "Sent MEDIA_SCANNER broadcast for URI: $resultUri")
                     }
                     
-                    // 2. Retrieve stored paths and trigger DELAYED scans
-                    val scanPath = param.thisObject?.let {
-                        XposedHelpers.getAdditionalInstanceField(it, "virtucam_scanPath") as? String
-                    }
-                    val obbPath = param.thisObject?.let {
-                        XposedHelpers.getAdditionalInstanceField(it, "virtucam_obbPath") as? String
-                    }
-                    
-                    if (scanPath != null || obbPath != null) {
-                        val capturedUri = resultUri
+                    // 2. Build paths and trigger DELAYED scans
+                    if (displayName != null && displayName.endsWith(".jpg", true)) {
+                        val dcimPath = "/storage/emulated/0/DCIM/Camera/$displayName"
+                        val obbPath = "/storage/emulated/0/Android/obb/top.bienvenido.saas.i18n/scopedStorage/com.android.camera/DCIM/Camera/$displayName"
+                        
                         Thread {
                             try {
                                 Thread.sleep(3000)
                                 
-                                // Scan the ACTUAL OBB path where MiAlgoEngine wrote the file
-                                if (obbPath != null) {
-                                    Log.e("DIAGNOSTIC_VIRTUCAM", "DELAYED scan (3s) OBB path: $obbPath")
-                                    triggerManualScan(obbPath)
-                                }
+                                // Scan ACTUAL OBB path where MiAlgoEngine wrote the file
+                                Log.e("DIAGNOSTIC_VIRTUCAM", "DELAYED scan (3s) OBB: $obbPath")
+                                triggerManualScan(obbPath)
                                 
-                                // Also scan the normalized DCIM path
-                                if (scanPath != null) {
-                                    Log.e("DIAGNOSTIC_VIRTUCAM", "DELAYED scan (3s) DCIM path: $scanPath")
-                                    triggerManualScan(scanPath)
-                                }
+                                // Also scan normalized DCIM path
+                                Log.e("DIAGNOSTIC_VIRTUCAM", "DELAYED scan (3s) DCIM: $dcimPath")
+                                triggerManualScan(dcimPath)
                                 
                                 // 5-second safety net
                                 Thread.sleep(2000)
-                                if (obbPath != null) {
-                                    Log.e("DIAGNOSTIC_VIRTUCAM", "DELAYED scan (5s) OBB path: $obbPath")
-                                    triggerManualScan(obbPath)
-                                }
-                                if (scanPath != null) {
-                                    Log.e("DIAGNOSTIC_VIRTUCAM", "DELAYED scan (5s) DCIM path: $scanPath")
-                                    triggerManualScan(scanPath)
-                                }
+                                Log.e("DIAGNOSTIC_VIRTUCAM", "DELAYED scan (5s) OBB: $obbPath")
+                                triggerManualScan(obbPath)
+                                Log.e("DIAGNOSTIC_VIRTUCAM", "DELAYED scan (5s) DCIM: $dcimPath")
+                                triggerManualScan(dcimPath)
                             } catch (_: Throwable) {}
                         }.start()
                     }
                 } catch (_: Throwable) {}
             }
+
         }
         
         XposedBridge.hookAllMethods(resolverClass, "insert", resolverHook)
@@ -627,11 +644,10 @@ object CameraHook {
 
     /**
      * Deep intercept of Xiaomi-specific classes that manage the "Parallel" flag.
+     * These apply directly to the lazily-loaded classes intercepted by hookLazyClasses.
      */
-    private fun hookXiaomiParallelDeep(lpparam: XC_LoadPackage.LoadPackageParam) {
-        // 1. Hook ParallelTaskData
-        val ptdClass = XposedHelpers.findClassIfExists("com.android.camera.ParallelTaskData", lpparam.classLoader)
-        if (ptdClass != null) {
+    private fun applyParallelTaskDataHooks(ptdClass: Class<*>) {
+        try {
             XposedBridge.hookAllMethods(ptdClass, "setParallel", object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     param.args[0] = false
@@ -644,16 +660,20 @@ object CameraHook {
                     param.result = false
                 }
             })
+        } catch (t: Throwable) {
+            Log.e("DIAGNOSTIC_VIRTUCAM", "Failed to apply ParallelTaskData hooks", t)
         }
-        
-        // 2. Hook AlgorithmManager (Xiaomi)
-        val algoManagerClass = XposedHelpers.findClassIfExists("com.android.camera.module.loader.camera2.AlgorithmManager", lpparam.classLoader)
-        if (algoManagerClass != null) {
+    }
+
+    private fun applyAlgorithmManagerHooks(algoManagerClass: Class<*>) {
+        try {
             XposedBridge.hookAllMethods(algoManagerClass, "isParallelCaptureEnabled", object : XC_MethodHook() {
                 override fun afterHookedMethod(param: MethodHookParam) {
                     param.result = false
                 }
             })
+        } catch (t: Throwable) {
+            Log.e("DIAGNOSTIC_VIRTUCAM", "Failed to apply AlgorithmManager hooks", t)
         }
     }
 
