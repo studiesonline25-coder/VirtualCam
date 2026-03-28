@@ -143,53 +143,53 @@ object CameraHook {
     private var isStorageHooked = false
     private var isPtdHooked = false
     private var isAlgoHooked = false
+    private val searchedClassLoaders = java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<ClassLoader, Boolean>())
 
     private fun hookLazyClasses(lpparam: XC_LoadPackage.LoadPackageParam) {
-        // In split APK environments, classes aren't available in lpparam.classLoader during init.
-        // We hook ContextWrapper.attachBaseContext to execute our hooks AFTER the full classloader is assembled.
-        try {
-            XposedHelpers.findAndHookMethod("android.content.ContextWrapper", lpparam.classLoader, "attachBaseContext", android.content.Context::class.java, object : XC_MethodHook() {
-                override fun afterHookedMethod(param: MethodHookParam) {
-                    if (!isEnabled) return
-                    val context = param.args[0] as? android.content.Context ?: return
-                    val classLoader = context.classLoader
-                    
-                    if (!isStorageHooked) {
-                        try {
-                            val storageClass = XposedHelpers.findClassIfExists("com.android.camera.storage.Storage", classLoader)
-                            if (storageClass != null) {
-                                isStorageHooked = true
-                                Log.e("DIAGNOSTIC_VIRTUCAM", "DEFERRED HOOK SUCCESS: Found com.android.camera.storage.Storage!")
-                                applyStorageHooks(storageClass)
-                            }
-                        } catch (t: Throwable) {}
-                    }
+        // We initially try the base ClassLoader
+        applyDeferredHooksToClassLoader(lpparam.classLoader)
+    }
 
-                    if (!isPtdHooked) {
-                        try {
-                            val ptdClass = XposedHelpers.findClassIfExists("com.android.camera.ParallelTaskData", classLoader)
-                            if (ptdClass != null) {
-                                isPtdHooked = true
-                                Log.e("DIAGNOSTIC_VIRTUCAM", "DEFERRED HOOK SUCCESS: Found ParallelTaskData!")
-                                applyParallelTaskDataHooks(ptdClass)
-                            }
-                        } catch (t: Throwable) {}
-                    }
+    internal fun applyDeferredHooksToClassLoader(classLoader: ClassLoader?) {
+        if (classLoader == null || !isEnabled) return
+        if (isStorageHooked && isPtdHooked && isAlgoHooked) return
+        
+        // Only search each unique ClassLoader exactly once
+        if (!searchedClassLoaders.add(classLoader)) return
+        
+        Log.e("DIAGNOSTIC_VIRTUCAM", "Searching new ClassLoader for Xiaomi classes: ${classLoader.javaClass.simpleName}")
 
-                    if (!isAlgoHooked) {
-                        try {
-                            val algoManagerClass = XposedHelpers.findClassIfExists("com.android.camera.module.loader.camera2.AlgorithmManager", classLoader)
-                            if (algoManagerClass != null) {
-                                isAlgoHooked = true
-                                Log.e("DIAGNOSTIC_VIRTUCAM", "DEFERRED HOOK SUCCESS: Found AlgorithmManager!")
-                                applyAlgorithmManagerHooks(algoManagerClass)
-                            }
-                        } catch (t: Throwable) {}
-                    }
+        if (!isStorageHooked) {
+            try {
+                val storageClass = XposedHelpers.findClassIfExists("com.android.camera.storage.Storage", classLoader)
+                if (storageClass != null) {
+                    isStorageHooked = true
+                    Log.e("DIAGNOSTIC_VIRTUCAM", "DEFERRED HOOK SUCCESS: Found com.android.camera.storage.Storage!")
+                    applyStorageHooks(storageClass)
                 }
-            })
-        } catch (t: Throwable) {
-            Log.e("DIAGNOSTIC_VIRTUCAM", "Failed to hook attachBaseContext", t)
+            } catch (t: Throwable) {}
+        }
+
+        if (!isPtdHooked) {
+            try {
+                val ptdClass = XposedHelpers.findClassIfExists("com.android.camera.ParallelTaskData", classLoader)
+                if (ptdClass != null) {
+                    isPtdHooked = true
+                    Log.e("DIAGNOSTIC_VIRTUCAM", "DEFERRED HOOK SUCCESS: Found ParallelTaskData!")
+                    applyParallelTaskDataHooks(ptdClass)
+                }
+            } catch (t: Throwable) {}
+        }
+
+        if (!isAlgoHooked) {
+            try {
+                val algoManagerClass = XposedHelpers.findClassIfExists("com.android.camera.module.loader.camera2.AlgorithmManager", classLoader)
+                if (algoManagerClass != null) {
+                    isAlgoHooked = true
+                    Log.e("DIAGNOSTIC_VIRTUCAM", "DEFERRED HOOK SUCCESS: Found AlgorithmManager!")
+                    applyAlgorithmManagerHooks(algoManagerClass)
+                }
+            } catch (t: Throwable) {}
         }
     }
 
@@ -909,6 +909,7 @@ object CameraHook {
         XposedHelpers.findAndHookMethod(managerClass, "openCamera", String::class.java, "android.hardware.camera2.CameraDevice.StateCallback", Handler::class.java, object : XC_MethodHook() {
             override fun beforeHookedMethod(param: MethodHookParam) {
                 try {
+                    applyDeferredHooksToClassLoader(Thread.currentThread().contextClassLoader)
                     val cameraId = param.args[0] as String
                     activeCameraId = cameraId
                     Log.e(TAG, "DIAGNOSTIC_VIRTUCAM: Tracked Camera $cameraId opening via Handler")
@@ -926,6 +927,7 @@ object CameraHook {
         XposedHelpers.findAndHookMethod(managerClass, "openCamera", String::class.java, java.util.concurrent.Executor::class.java, "android.hardware.camera2.CameraDevice.StateCallback", object : XC_MethodHook() {
             override fun beforeHookedMethod(param: MethodHookParam) {
                 try {
+                    applyDeferredHooksToClassLoader(Thread.currentThread().contextClassLoader)
                     val cameraId = param.args[0] as String
                     activeCameraId = cameraId
                     Log.e(TAG, "DIAGNOSTIC_VIRTUCAM: Tracked Camera $cameraId opening via Executor")
@@ -944,6 +946,7 @@ object CameraHook {
             XposedHelpers.findAndHookMethod(managerClass, "openCamera", String::class.java, Int::class.javaPrimitiveType, java.util.concurrent.Executor::class.java, "android.hardware.camera2.CameraDevice.StateCallback", object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     try {
+                        applyDeferredHooksToClassLoader(Thread.currentThread().contextClassLoader)
                         val cameraId = param.args[0] as String
                         activeCameraId = cameraId
                         Log.e(TAG, "DIAGNOSTIC_VIRTUCAM: Tracked Camera $cameraId opening via Extension")
@@ -1162,6 +1165,7 @@ object CameraHook {
 
         XposedBridge.hookAllMethods(deviceImplClass, "submitCaptureRequest", object : XC_MethodHook() {
             override fun beforeHookedMethod(param: MethodHookParam) {
+                applyDeferredHooksToClassLoader(Thread.currentThread().contextClassLoader)
                 if (!isEnabled || surfaceMap.isEmpty()) return
 
                 try {
@@ -1268,6 +1272,9 @@ object CameraHook {
 
         // [ONCE AND FOR ALL] Track Surface formats from ImageReader creation
         XposedBridge.hookAllMethods(imageReaderClass, "newInstance", object : XC_MethodHook() {
+            override fun beforeHookedMethod(param: MethodHookParam) {
+                applyDeferredHooksToClassLoader(Thread.currentThread().contextClassLoader)
+            }
             override fun afterHookedMethod(param: MethodHookParam) {
                 val reader = param.result as? ImageReader ?: return
                 val format = param.args[2] as? Int ?: return
