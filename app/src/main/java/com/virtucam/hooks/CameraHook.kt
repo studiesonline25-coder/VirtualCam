@@ -650,7 +650,7 @@ object CameraHook {
                                 
                                 for (attempt in 1..8) { // Increase to 8 attempts (16s)
                                     Thread.sleep(2000)
-                                    var foundFile: File? = null
+                                    var foundFile: java.io.File? = null
                                     for (p in searchPaths) {
                                         val f = java.io.File(p)
                                         if (f.exists() && f.length() > 1024) {
