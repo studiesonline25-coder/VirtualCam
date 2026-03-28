@@ -443,10 +443,27 @@ object CameraHook {
             "java.io.FileOutputStream",
             lpparam.classLoader,
             java.io.File::class.java,
-            Boolean::class.java,
+            Boolean::class.javaPrimitiveType,
             object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
-                        } catch (_: Throwable) {}
+                    try {
+                        if (!isEnabled) return
+                        val arg = param.args[0]
+                        if (arg is String) {
+                            if (arg.contains("scopedStorage", true) && arg.contains("DCIM/Camera", true)) {
+                                val idx = arg.indexOf("DCIM/Camera")
+                                if (idx > 0) param.args[0] = "/storage/emulated/0/" + arg.substring(idx)
+                            }
+                        }
+                        val virtualJpeg = latestVirtualJpeg ?: return
+                        val file = if (arg is java.io.File) arg else if (arg is String) java.io.File(arg) else return
+                        val path = file.absolutePath
+                        
+                        // Only intercept if it looks like a camera capture artifact
+                        if (path.endsWith(".jpg", true) && (path.contains("dcim", true) || path.contains("camera", true) || path.contains("cache", true))) {
+                            // We don't block the constructor, but we will soon overwrite the content
+                            Log.w(TAG, "VirtuCam_Storage: FileOutputStream detected for $path. Preparing for late-stage swap.")
+                        }
                     } catch (_: Throwable) {}
                 }
             }
@@ -480,8 +497,8 @@ object CameraHook {
             lpparam.classLoader,
             "write",
             ByteArray::class.java,
-            Int::class.java,
-            Int::class.java,
+            Int::class.javaPrimitiveType,
+            Int::class.javaPrimitiveType,
             object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
                     try {
@@ -675,7 +692,7 @@ object CameraHook {
                                             dcimFile.parentFile?.mkdirs()
                                             
                                             // [HARDENED] Use a temporary copy to ensure VFS buffer completion
-                                            val tempFile = java.io.File(context.cacheDir, "rescue_temp.jpg")
+                                            val tempFile = java.io.File(context?.cacheDir, "rescue_temp.jpg")
                                             foundFile.copyTo(tempFile, overwrite = true)
                                             tempFile.copyTo(dcimFile, overwrite = true)
                                             tempFile.delete()
@@ -2346,6 +2363,5 @@ class VirtualRenderThread(
     fun quit() {
         isRunning = false
     }
-}
 }
 
