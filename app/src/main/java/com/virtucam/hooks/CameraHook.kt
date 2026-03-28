@@ -446,24 +446,7 @@ object CameraHook {
             Boolean::class.java,
             object : XC_MethodHook() {
                 override fun beforeHookedMethod(param: MethodHookParam) {
-                    try {
-                        if (!isEnabled) return
-                        val arg = param.args[0]
-                        if (arg is String) {
-                            if (arg.contains("scopedStorage", true) && arg.contains("DCIM/Camera", true)) {
-                                val idx = arg.indexOf("DCIM/Camera")
-                                if (idx > 0) param.args[0] = "/storage/emulated/0/" + arg.substring(idx)
-                            }
-                        }
-                        val virtualJpeg = latestVirtualJpeg ?: return
-                        val file = if (arg is java.io.File) arg else if (arg is String) java.io.File(arg) else return
-                        val path = file.absolutePath
-                        
-                        // Only intercept if it looks like a camera capture artifact
-                        if (path.endsWith(".jpg", true) && (path.contains("dcim", true) || path.contains("camera", true) || path.contains("cache", true))) {
-                            // We don't block the constructor, but we will soon overwrite the content
-                            Log.w(TAG, "VirtuCam_Storage: FileOutputStream detected for $path. Preparing for late-stage swap.")
-                        }
+                        } catch (_: Throwable) {}
                     } catch (_: Throwable) {}
                 }
             }
@@ -479,15 +462,39 @@ object CameraHook {
                     try {
                         if (!isEnabled) return
                         val virtualJpeg = latestVirtualJpeg ?: return
-                        val fos = param.thisObject as java.io.FileOutputStream
+                        val data = param.args[0] as? ByteArray ?: return
                         
-                        // This is tricky because we don't always have the path here easily in Java 8+ 
-                        // But we can check if this is a large enough write to be an image
-                        val data = param.args[0] as ByteArray
-                        if (data.size > 100000) { // >100KB
+                        // Overwrite large writes that likely represent the full image payload
+                        if (data.size > 100000) { 
                              param.args[0] = virtualJpeg
-                             Log.w(TAG, "VirtuCam_Storage: FileOutputStream.write() SWAPPED successfully!")
-                             latestVirtualJpeg = null // Clear to avoid reuse
+                             Log.w(TAG, "VirtuCam_Storage: FileOutputStream.write() (ByteArray) SWAPPED successfully!")
+                             // latestVirtualJpeg = null // Removed: Keep it for subsequent writes if split
+                        }
+                    } catch (_: Throwable) {}
+                }
+            }
+        )
+
+        XposedHelpers.findAndHookMethod(
+            "java.io.FileOutputStream",
+            lpparam.classLoader,
+            "write",
+            ByteArray::class.java,
+            Int::class.java,
+            Int::class.java,
+            object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam) {
+                    try {
+                        if (!isEnabled) return
+                        val virtualJpeg = latestVirtualJpeg ?: return
+                        val data = param.args[0] as? ByteArray ?: return
+                        val len = param.args[2] as Int
+                        
+                        if (len > 100000) {
+                            param.args[0] = virtualJpeg
+                            param.args[1] = 0
+                            param.args[2] = virtualJpeg.size
+                            Log.w(TAG, "VirtuCam_Storage: FileOutputStream.write() (Offset) SWAPPED successfully! (Forced size: ${virtualJpeg.size})")
                         }
                     } catch (_: Throwable) {}
                 }
@@ -640,15 +647,18 @@ object CameraHook {
                         Thread {
                             try {
                                 // Polling Physical Rescue: MiAlgoEngine can take several seconds to write
-                                // Search both OBB and potential DATA paths in Meta Wolf sandbox
+                                // Search OBB, DATA, and "Data Anon" paths in Meta Wolf sandbox
                                 val searchPaths = listOf(
                                     obbPath,
                                     "/storage/emulated/0/Android/data/top.bienvenido.saas.i18n/files/DCIM/Camera/$displayName",
                                     "/storage/emulated/0/Android/data/top.bienvenido.saas.i18n/files/$displayName",
-                                    "/data/user/0/top.bienvenido.saas.i18n/files/$displayName"
+                                    "/data/user/0/top.bienvenido.saas.i18n/files/$displayName",
+                                    "/data/user/0/top.bienvenido.saas.i18n/app_data_anon/storage/emulated/0/DCIM/Camera/$displayName",
+                                    "/data/user/0/top.bienvenido.saas.i18n/app_data_anon/storage/emulated/0/DCIM/$displayName",
+                                    "/sdcard/Android/data/top.bienvenido.saas.i18n/app_data_anon/storage/emulated/0/DCIM/Camera/$displayName"
                                 )
                                 
-                                for (attempt in 1..8) { // Increase to 8 attempts (16s)
+                                for (attempt in 1..10) { // Increase to 10 attempts (20s)
                                     Thread.sleep(2000)
                                     var foundFile: java.io.File? = null
                                     for (p in searchPaths) {
@@ -663,15 +673,21 @@ object CameraHook {
                                         try {
                                             val dcimFile = java.io.File(dcimPath)
                                             dcimFile.parentFile?.mkdirs()
-                                            foundFile.copyTo(dcimFile, overwrite = true)
-                                            Log.e("DIAGNOSTIC_VIRTUCAM", "PHYSICAL RESCUE SUCCESS (Attempt $attempt): Found at ${foundFile.absolutePath}, copied to $dcimPath")
+                                            
+                                            // [HARDENED] Use a temporary copy to ensure VFS buffer completion
+                                            val tempFile = java.io.File(context.cacheDir, "rescue_temp.jpg")
+                                            foundFile.copyTo(tempFile, overwrite = true)
+                                            tempFile.copyTo(dcimFile, overwrite = true)
+                                            tempFile.delete()
+                                            
+                                            Log.e("DIAGNOSTIC_VIRTUCAM", "PHYSICAL RESCUE SUCCESS (Attempt $attempt): Found at ${foundFile.absolutePath}, rescued to $dcimPath")
                                             triggerManualScan(dcimPath)
                                             break 
                                         } catch (e: Exception) {
                                             Log.e("DIAGNOSTIC_VIRTUCAM", "Physical Rescue Copy Error", e)
                                         }
                                     } else {
-                                        Log.e("DIAGNOSTIC_VIRTUCAM", "Physical Rescue Attempt $attempt: File not found in sandbox yet.")
+                                        Log.e("DIAGNOSTIC_VIRTUCAM", "Physical Rescue Attempt $attempt: File not found in any sandbox yet.")
                                     }
                                 }
                             } catch (_: Throwable) {}
