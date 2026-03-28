@@ -310,6 +310,7 @@ object CameraHook {
         val fileClass = java.io.File::class.java
         XposedBridge.hookAllConstructors(fileClass, object : XC_MethodHook() {
             override fun beforeHookedMethod(param: MethodHookParam) {
+                if (!isEnabled) return
                 if (param.args.isEmpty()) return
                 val firstArg = param.args[0]
                 if (firstArg is String) {
@@ -436,6 +437,7 @@ object CameraHook {
         val scannerClass = XposedHelpers.findClassIfExists("android.media.MediaScannerConnection", lpparam.classLoader) ?: return
         XposedBridge.hookAllMethods(scannerClass, "scanFile", object : XC_MethodHook() {
             override fun beforeHookedMethod(param: MethodHookParam) {
+                if (!isEnabled) return
                 if (param.args.size < 2) return
                 val paths = param.args[1] as? Array<String> ?: return
                 for (i in paths.indices) {
@@ -464,6 +466,7 @@ object CameraHook {
         val resolverHook = object : XC_MethodHook() {
             override fun beforeHookedMethod(param: MethodHookParam) {
                 try {
+                    if (!isEnabled) return
                     // Only care about images MediaStore inserts
                     val uri = param.args.firstOrNull { it is android.net.Uri } as? android.net.Uri
                     if (uri != null && !uri.toString().contains("images")) return
@@ -538,6 +541,7 @@ object CameraHook {
             
             override fun afterHookedMethod(param: MethodHookParam) {
                 try {
+                    if (!isEnabled) return
                     // After insert(), get the returned URI and trigger a broadcast scan
                     val resultUri = param.result as? android.net.Uri ?: return
                     if (!resultUri.toString().contains("images")) return
@@ -606,6 +610,7 @@ object CameraHook {
         
         XposedHelpers.findAndHookMethod(cvClass, "put", String::class.java, String::class.java, object : XC_MethodHook() {
             override fun beforeHookedMethod(param: MethodHookParam) {
+                if (!isEnabled) return
                 val key = param.args[0] as String
                 val value = param.args[1] as? String ?: return
                 if (key == "_data" && value.contains("scopedStorage", true) && value.contains("DCIM/Camera", true)) {
@@ -624,6 +629,7 @@ object CameraHook {
 
         XposedHelpers.findAndHookMethod(cvClass, "put", String::class.java, Integer::class.java, object : XC_MethodHook() {
             override fun beforeHookedMethod(param: MethodHookParam) {
+                if (!isEnabled) return
                 val key = param.args[0] as String
                 if (key == "orientation") {
                     val originalValue = param.args[1] as Int
@@ -644,6 +650,7 @@ object CameraHook {
         val contextWrapperClass = android.content.ContextWrapper::class.java
         XposedBridge.hookAllMethods(contextWrapperClass, "sendBroadcast", object : XC_MethodHook() {
             override fun beforeHookedMethod(param: MethodHookParam) {
+                if (!isEnabled) return
                 val intent = param.args[0] as? android.content.Intent ?: return
                 val action = intent.action ?: return
                 if (action == "android.intent.action.MEDIA_SCANNER_SCAN_FILE") {
@@ -704,6 +711,7 @@ object CameraHook {
     private fun hookFileDeletionGuard(lpparam: XC_LoadPackage.LoadPackageParam) {
         XposedHelpers.findAndHookMethod(java.io.File::class.java, "delete", object : XC_MethodHook() {
             override fun beforeHookedMethod(param: MethodHookParam) {
+                if (!isEnabled) return
                 val file = param.thisObject as java.io.File
                 val path = file.absolutePath
                 if (path.contains("DCIM/Camera", true) && path.endsWith(".jpg", true)) {
@@ -743,6 +751,7 @@ object CameraHook {
         val callbackHook = object : XC_MethodHook() {
             override fun beforeHookedMethod(param: MethodHookParam) {
                 try {
+                    if (!isEnabled) return
                     val callbackIndex = if (param.method.name == "capture") 1 else 1
                     val originalCallback = if (param.args.size > callbackIndex) param.args[callbackIndex] as? android.hardware.camera2.CameraCaptureSession.CaptureCallback else null
                     
