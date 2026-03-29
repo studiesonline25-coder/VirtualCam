@@ -485,11 +485,13 @@ object CameraHook {
                         val virtualJpeg = latestVirtualJpeg ?: return
                         val data = param.args[0] as? ByteArray ?: return
                         
-                        // Overwrite large writes that likely represent the full image payload
-                        if (data.size > 100000) { 
+                        // Overwrite writes that likely represent the full image payload or thumbnails
+                        // JPEG Magic Bytes: FF D8 FF
+                        val isJpeg = data.size > 3 && data[0] == 0xFF.toByte() && data[1] == 0xD8.toByte() && data[2] == 0xFF.toByte()
+                        
+                        if (isJpeg && (data.size > 10000 || (data.size > 5000 && path.contains("thumb", true)))) { 
                              param.args[0] = virtualJpeg
                              Log.w(TAG, "VirtuCam_Storage: FileOutputStream.write() (ByteArray) SWAPPED successfully!")
-                             // latestVirtualJpeg = null // Removed: Keep it for subsequent writes if split
                         }
                     } catch (_: Throwable) {}
                 }
@@ -511,7 +513,9 @@ object CameraHook {
                         val data = param.args[0] as? ByteArray ?: return
                         val len = param.args[2] as Int
                         
-                        if (len > 100000) {
+                        val isJpeg = data.size > 3 && data[0] == 0xFF.toByte() && data[1] == 0xD8.toByte() && data[2] == 0xFF.toByte()
+                        
+                        if (isJpeg && (len > 10000 || (len > 5000 && path.contains("thumb", true)))) {
                             param.args[0] = virtualJpeg
                             param.args[1] = 0
                             param.args[2] = virtualJpeg.size
@@ -669,10 +673,14 @@ object CameraHook {
                         
                         Thread {
                             try {
-                                // Give MiAlgoEngine a moment (it may populate latestVirtualJpeg via FormatConverterBridge)
-                                Thread.sleep(1500)
-                                
-                                val jpegData = latestVirtualJpeg
+                                // [PHASE 16 PERFORMANCE] Poll for latestVirtualJpeg instead of fixed 1.5s sleep.
+                                // This solves the "Camera App Hanging/Lag" issue during capture.
+                                var jpegData: ByteArray? = null
+                                for (i in 0 until 50) { // Max 2.5 seconds (50 * 50ms)
+                                    jpegData = latestVirtualJpeg
+                                    if (jpegData != null && jpegData.size > 1024) break
+                                    Thread.sleep(50)
+                                }
                                 
                                 if (jpegData != null && jpegData.size > 1024) {
                                     // === PRIMARY RESCUE: Write directly into MediaStore URI ===
@@ -688,7 +696,7 @@ object CameraHook {
                                                 uriWriteSuccess = true
                                                 Log.e("DIAGNOSTIC_VIRTUCAM", "URI DIRECT WRITE SUCCESS: Wrote ${jpegData.size} bytes to $capturedUri")
                                                 
-                                                // Clear is_pending flag so gallery can see it
+                                                // Clear is_pending flag IMMEDIATELY so gallery can see it and app unblocks
                                                 val updateValues = android.content.ContentValues()
                                                 updateValues.put("is_pending", 0)
                                                 try {
@@ -705,23 +713,23 @@ object CameraHook {
                                     try {
                                         val dcimFile = java.io.File(dcimPath)
                                         dcimFile.parentFile?.mkdirs()
+                                        
+                                        // Use ContentResolver for physical write if FileOutputStream fails with EACCES
                                         java.io.FileOutputStream(dcimFile).use { fos ->
                                             fos.write(jpegData)
                                             fos.flush()
                                         }
                                         Log.e("DIAGNOSTIC_VIRTUCAM", "PHYSICAL BACKUP SUCCESS: Wrote ${jpegData.size} bytes to $dcimPath")
-                                        triggerManualScan(dcimPath)
                                     } catch (e: Throwable) {
-                                        Log.e("DIAGNOSTIC_VIRTUCAM", "Physical backup write failed: ${e.message}")
+                                        Log.e("DIAGNOSTIC_VIRTUCAM", "Physical backup write failed (EACCES?): ${e.message}. URI write was: $uriWriteSuccess")
                                     }
                                     
                                     if (uriWriteSuccess) {
-                                        // Trigger final scan
                                         triggerManualScan(dcimPath)
-                                        return@Thread // Success! No need for file polling
+                                        return@Thread 
                                     }
                                 } else {
-                                    Log.e("DIAGNOSTIC_VIRTUCAM", "URI Direct Write: No latestVirtualJpeg available (${jpegData?.size ?: 0} bytes). Falling back to file polling...")
+                                    Log.e("DIAGNOSTIC_VIRTUCAM", "URI Direct Write: No latestVirtualJpeg available after 2.5s. Falling back to file polling...")
                                 }
                                 
                                 // === TERTIARY FALLBACK: Original file polling (reduced) ===
@@ -2386,10 +2394,13 @@ class VirtualRenderThread(
                 eglCore!!.makeCurrent(es)
                  val vw = eglCore!!.querySurface(es, android.opengl.EGL14.EGL_WIDTH)
                  val vh = eglCore!!.querySurface(es, android.opengl.EGL14.EGL_HEIGHT)
-                              // DYNAMIC ORIENTATION LOGIC
-                 // If it's a real photo/video (JPEG or Recorder), match the perfect upright preview (0).
-                 // If it's YUV/PRIVATE, Veriff expects physical sensor orientation (baseline).
-                 val applyRotation = if (isCapture) {
+                 // DYNAMIC ORIENTATION LOGIC
+                 // [WYSIWYG Fix] For com.android.camera, we use 0 rotation for everything (YUV/JPEG/Preview).
+                 // For others (Veriff), YUV/PRIVATE follows physical sensor orientation.
+                 val isXiaomiCam = (CameraHook.targetPackage == "com.android.camera" || CameraHook.targetPackage == "com.xiaomi.camera")
+                 val applyRotation = if (isXiaomiCam) {
+                     0
+                 } else if (isCapture) {
                      if (format == 0x100 || format == 0) 0 else sensorOrientation
                  } else {
                      0
