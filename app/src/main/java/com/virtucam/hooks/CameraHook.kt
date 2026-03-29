@@ -2216,14 +2216,7 @@ class VirtualRenderThread(
 
     private fun getTargetRatio(vW: Int, vH: Int, isCapture: Boolean): Float {
         return try {
-            if (isCapture) {
-                // Captured Output (Photos/Videos) do NOT get blindly stretched by the OEM UI.
-                // We must return true geometrical ratio to prevent JPEG/YUV output from being heavily squished.
-                vW.toFloat() / vH.toFloat()
-            } else {
-                // Most modern camera apps stretch 4:3 Preview buffers to exactly a 16:9 UI viewfinder.
-                (9f / 16f) * CameraHook.compensationFactor
-            }
+            (vW.toFloat() / vH.toFloat()) * CameraHook.compensationFactor
         } catch (e: Exception) {
             vW.toFloat() / vH.toFloat()
         }
