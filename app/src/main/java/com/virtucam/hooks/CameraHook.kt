@@ -2226,6 +2226,7 @@ class VirtualRenderThread(
     
     private var mediaSurfaceTexture: SurfaceTexture? = null
     private var mediaSurface: Surface? = null
+    private var frameCount = 0
 
     private fun getTargetRatio(vW: Int, vH: Int, isCapture: Boolean): Float {
         return try {
@@ -2331,6 +2332,9 @@ class VirtualRenderThread(
                     Matrix.setIdentityM(matrix, 0)
                     
                     while (isRunning) {
+                        frameCount++
+                        if (frameCount % 10 == 0) CameraHook.loadConfiguration()
+
                         if (!drawToAllSurfaces(matrix, staticImageW, staticImageH)) break
                         
                         // Handle Photo/Capture Requests (Static Image)
@@ -2355,11 +2359,10 @@ class VirtualRenderThread(
     }
 
     private fun renderLoop(hasNewFrame: java.util.concurrent.atomic.AtomicBoolean, sizeProvider: () -> Pair<Int, Int>) {
-        var frameCount = 0
         val matrix = FloatArray(16)
         while (isRunning) {
             frameCount++
-            if (frameCount % 60 == 0) CameraHook.loadConfiguration()
+            if (frameCount % 10 == 0) CameraHook.loadConfiguration()
             
             if (hasNewFrame.compareAndSet(true, false)) {
                 try { mediaSurfaceTexture?.updateTexImage() } catch (_: Exception) {}
@@ -2422,7 +2425,9 @@ class VirtualRenderThread(
                      false
                  }
 
-                 textureRenderer?.draw(matrix, contentW, contentH, vw, vh, getTargetRatio(vw, vh, isCapture), applyRotation, userRotation, shouldMirror, CameraHook.zoomFactor)
+                 val ratio = getTargetRatio(vw, vh, isCapture)
+                 if (frameCount % 30 == 0) Log.d("VirtuCam_Render", "Drawing: ratio=$ratio, stretch=${CameraHook.compensationFactor}, zoom=${CameraHook.zoomFactor}, rot=$applyRotation+$userRotation")
+                 textureRenderer?.draw(matrix, contentW, contentH, vw, vh, ratio, applyRotation, userRotation, shouldMirror, CameraHook.zoomFactor)
 
                  if (eglCore?.swapBuffers(es) == false) {
                     Log.w("VirtuCam_Render", "Surface abandoned, removing.")
