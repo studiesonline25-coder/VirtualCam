@@ -89,6 +89,9 @@ object CameraHook {
     
     @Volatile
     var isColorSwapped: Boolean = false
+
+    @Volatile
+    var compensationFactor: Float = 1.0f
     
     @Volatile
     var lastRequestedOrientation: Int = -1 // -1 = NOT_SET
@@ -1847,8 +1850,7 @@ object CameraHook {
         return bridge?.inputSurface ?: targetSurface
     }
 
-    @Volatile
-    var compensationFactor: Float = 1.0f
+    // Removed duplicate definition of compensationFactor
 
     /**
      * Poll configuration via ContentProvider
@@ -1875,7 +1877,7 @@ object CameraHook {
                         rotation = if (it.columnCount > 10) it.getInt(10) else 0
                         isColorSwapped = if (it.columnCount > 11) it.getInt(11) == 1 else false
                         
-                        Log.d(TAG, "VirtuCam_Hook: Config loaded. Enabled: $isEnabled, Zoom: $zoomFactor, TCP: $rtspUseTcp, Rot: $rotation, ColorSwap: $isColorSwapped")
+                        Log.d(TAG, "VirtuCam_Hook: Config loaded. Enabled: $isEnabled, Zoom: $zoomFactor, Stretch: $compensationFactor, TCP: $rtspUseTcp, Rot: $rotation, ColorSwap: $isColorSwapped")
                     } catch (innerE: Exception) {
                         Log.e(TAG, "VirtuCam_Hook: Error parsing cursor columns", innerE)
                     }

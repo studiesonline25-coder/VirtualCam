@@ -163,8 +163,7 @@ class TextureRenderer(private val isVideo: Boolean = true) {
                 Matrix.rotateM(mvpMatrix, 0, totalRotation.toFloat(), 0f, 0f, 1f)
             }
 
-            val isSnapshot = viewWidth >= 2500 || viewHeight >= 2500
-            val viewRatio = if (targetRatio > 0f && !isSnapshot) targetRatio else (viewWidth.toFloat() / viewHeight.toFloat())
+            val viewRatio = if (targetRatio > 0f) targetRatio else (viewWidth.toFloat() / viewHeight.toFloat())
             
             // If we rotated 90 or 270, the effective video dimensions are swapped for ratio calc
             val effectiveVideoRatio = if (totalRotation == 90 || totalRotation == 270 || totalRotation == -90 || totalRotation == -270) {
