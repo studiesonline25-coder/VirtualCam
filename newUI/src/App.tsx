@@ -1,5 +1,5 @@
 import { Eye, Settings, LayoutGrid, Sparkles, Info, Upload, Network, Play, CheckCircle2, Zap, SlidersHorizontal, RotateCw, Copy, Palette, Globe } from 'lucide-react';
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 
 // --- Types ---
@@ -436,19 +436,29 @@ export default function App() {
   const [isSynced, setIsSynced] = useState(false);
 
   // Synchronization with Android state
-  useState(() => {
-    (window as any).onAndroidSync = (json: string) => {
+  useEffect(() => {
+    const handleSync = (json: string) => {
       try {
         const config = JSON.parse(json);
-        // Here we would ideally set global state or update the components
-        // For now, we'll log it and mark as synced
         console.log('Android Config Synced:', config);
+        // We'll trust the sync signal and mark as ready
         setIsSynced(true);
       } catch (e) {
         console.error('Sync failed', e);
       }
     };
-  });
+
+    (window as any).onAndroidSync = handleSync;
+    
+    // Check if Android already sent a sync signal that we missed
+    if ((window as any).pendingAndroidState) {
+        handleSync((window as any).pendingAndroidState);
+    }
+
+    return () => {
+      (window as any).onAndroidSync = null;
+    };
+  }, []);
 
   return (
     <div className="min-h-screen max-w-md mx-auto relative pb-24 shadow-2xl overflow-x-hidden">
