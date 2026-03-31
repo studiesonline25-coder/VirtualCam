@@ -2230,11 +2230,12 @@ class VirtualRenderThread(
 
     private fun getTargetRatio(vW: Int, vH: Int, isCapture: Boolean): Float {
         return try {
-            val isPortrait = vH > vW
-            val baseRatio = if (isPortrait) (9.0f / 16.0f) else (16.0f / 9.0f)
-            baseRatio * CameraHook.compensationFactor
-        } catch (e: Exception) {
+            // Return authentic hardware ratio multiplied by user's 'stretch' manual override.
+            // A factor of 1.0 results in mathematically perfect 1:1 geometry.
+            // A factor of 1.33 corrects a 16:9 phone to a 4:3 viewfinder.
             (vW.toFloat() / vH.toFloat()) * CameraHook.compensationFactor
+        } catch (e: Exception) {
+            1.0f
         }
     }
 
