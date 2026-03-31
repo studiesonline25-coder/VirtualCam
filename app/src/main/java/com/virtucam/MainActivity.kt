@@ -102,6 +102,9 @@ class MainActivity : AppCompatActivity() {
             put("colorSwap", config.isColorSwapped)
             put("tcpMode", config.rtspUseTcp)
             put("streamUrl", config.streamUrl ?: "")
+            put("isStream", config.isStream)
+            put("mediaUri", config.spoofMediaUri?.toString() ?: "")
+            put("isSpoofVideo", config.isSpoofVideo)
         }
         
         webView.evaluateJavascript("window.onAndroidSync('$state')", null)
@@ -159,6 +162,7 @@ class MainActivity : AppCompatActivity() {
             config.isStream = true
             runOnUiThread {
                 Toast.makeText(this@MainActivity, "Stream Connected: $url", Toast.LENGTH_SHORT).show()
+                syncConfigToWeb()
             }
         }
     }
@@ -193,6 +197,7 @@ class MainActivity : AppCompatActivity() {
         config.isSpoofVideo = isVideo
         config.isStream = false
         
+        syncConfigToWeb()
         Toast.makeText(this, "Media Ready!", Toast.LENGTH_SHORT).show()
     }
 }

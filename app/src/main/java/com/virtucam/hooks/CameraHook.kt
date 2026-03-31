@@ -2230,12 +2230,16 @@ class VirtualRenderThread(
 
     private fun getTargetRatio(vW: Int, vH: Int, isCapture: Boolean, mediaW: Int, mediaH: Int): Float {
         return try {
-            // [Regression Restore] Use fixed 16:9 / 9:16 baselines based on MEDIA orientation.
-            // This ensures gallery parity (black bars) regardless of screen hardware.
-            val isMediaPortrait = mediaH > mediaW
-            val baseRatio = if (isMediaPortrait) (9.0f / 16.0f) else (16.0f / 9.0f)
-            
-            baseRatio * CameraHook.compensationFactor
+            if (isCapture) {
+                // [WYSIWYG Fix] For final captures, use authentic surface dimensions.
+                // This prevents 'vertical flattening' caused by forcing 16:9 on 4:3 surfaces.
+                (vW.toFloat() / vH.toFloat()) * CameraHook.compensationFactor
+            } else {
+                // [Regression Restore] For PREVIEW, use fixed baselines based on MEDIA orientation.
+                val isMediaPortrait = mediaH > mediaW
+                val baseRatio = if (isMediaPortrait) (9.0f / 16.0f) else (16.0f / 9.0f)
+                baseRatio * CameraHook.compensationFactor
+            }
         } catch (e: Exception) {
             (vW.toFloat() / vH.toFloat()) * CameraHook.compensationFactor
         }

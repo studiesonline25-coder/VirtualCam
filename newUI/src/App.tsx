@@ -1,5 +1,5 @@
 import { Eye, Settings, LayoutGrid, Sparkles, Info, Upload, Network, Play, CheckCircle2, Zap, SlidersHorizontal, RotateCw, Copy, Palette, Globe } from 'lucide-react';
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 
 // --- Types ---
@@ -82,9 +82,10 @@ const FrameControl = () => {
             type="range" 
             min="0.5" 
             max="2.0" 
-            step="0.1" 
+            step="0.01" 
             value={zoom} 
             onChange={(e) => updateZoom(parseFloat(e.target.value))}
+            onPointerDown={(e) => e.stopPropagation()}
             className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-emerald-neon"
           />
         </div>
@@ -97,10 +98,11 @@ const FrameControl = () => {
           <input 
             type="range" 
             min="0.5" 
-            max="1.5" 
-            step="0.1" 
+            max="2.0" 
+            step="0.01" 
             value={stretch} 
             onChange={(e) => updateStretch(parseFloat(e.target.value))}
+            onPointerDown={(e) => e.stopPropagation()}
             className="w-full h-1 bg-gray-800 rounded-lg appearance-none cursor-pointer accent-emerald-neon"
           />
         </div>
@@ -186,6 +188,23 @@ const AdvancedControl = () => {
 const PanelScreen = () => {
   const [subTab, setSubTab] = useState<PanelSubTab>('media');
   const [isActive, setIsActive] = useState(false);
+  const [mediaUri, setMediaUri] = useState<string | null>(null);
+  const [isVideo, setIsVideo] = useState(false);
+  const [streamUrl, setStreamUrl] = useState<string>('');
+  const [isStreamActive, setIsStreamActive] = useState(false);
+
+  useEffect(() => {
+    const handleSync = (e: any) => {
+      const data = typeof e.detail === 'string' ? JSON.parse(e.detail) : e.detail;
+      setIsActive(data.isEnabled || false);
+      setMediaUri(data.mediaUri || null);
+      setIsVideo(data.isSpoofVideo || false);
+      setStreamUrl(data.streamUrl || '');
+      setIsStreamActive(data.isStream || false);
+    };
+    window.addEventListener('android-sync', handleSync as any);
+    return () => window.removeEventListener('android-sync', handleSync as any);
+  }, []);
 
   return (
     <motion.div 
@@ -217,21 +236,42 @@ const PanelScreen = () => {
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.95 }}
-            onClick={() => (window as any).Android?.pickMedia()}
-            className="bg-card-dark/50 border border-dashed border-border-dark rounded-3xl p-10 flex flex-col items-center justify-center gap-4 group hover:border-emerald-neon/30 transition-colors cursor-pointer"
+            className="space-y-4"
           >
-            <div className="w-16 h-16 rounded-2xl bg-emerald-neon/5 flex items-center justify-center border border-emerald-neon/10 group-hover:bg-emerald-neon/10 transition-colors">
-              <Upload className="w-8 h-8 text-emerald-neon" />
-            </div>
-            <div className="text-center">
-              <h4 className="font-bold text-emerald-neon uppercase tracking-widest text-xs mb-1">Select Media</h4>
-              <p className="text-[10px] text-gray-500 uppercase tracking-wider font-medium">Trigger Android Media Picker</p>
-            </div>
-            <div className="mt-8 pt-8 border-t border-border-dark w-full text-center">
-              <p className="text-[9px] text-gray-600 leading-relaxed max-w-[200px] mx-auto">
-                Supported formats: MP4, MOV, WEBM, JPG, PNG.
-              </p>
-            </div>
+            {!mediaUri ? (
+              <div 
+                onClick={() => (window as any).Android?.pickMedia()}
+                className="bg-card-dark/50 border border-dashed border-border-dark rounded-3xl p-10 flex flex-col items-center justify-center gap-4 group hover:border-emerald-neon/30 transition-colors cursor-pointer"
+              >
+                <div className="w-16 h-16 rounded-2xl bg-emerald-neon/5 flex items-center justify-center border border-emerald-neon/10 group-hover:bg-emerald-neon/10 transition-colors">
+                  <Upload className="w-8 h-8 text-emerald-neon" />
+                </div>
+                <div className="text-center">
+                  <h4 className="font-bold text-emerald-neon uppercase tracking-widest text-xs mb-1">Select Media</h4>
+                  <p className="text-[10px] text-gray-500 uppercase tracking-wider font-medium">Trigger Android Media Picker</p>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="bg-card-dark border border-border-dark rounded-3xl overflow-hidden aspect-video relative group">
+                   {isVideo ? (
+                     <video src={mediaUri} className="w-full h-full object-contain bg-black" autoPlay loop muted />
+                   ) : (
+                     <img src={mediaUri} className="w-full h-full object-contain bg-black" />
+                   )}
+                   <div className="absolute inset-0 bg-gradient-to-t from-bg-dark/80 to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex items-end p-4">
+                      <span className="text-[10px] text-gray-300 truncate">{mediaUri.split('/').pop()}</span>
+                   </div>
+                </div>
+                <button 
+                  onClick={() => (window as any).Android?.pickMedia()}
+                  className="w-full py-3 rounded-2xl bg-emerald-neon/10 border border-emerald-neon/20 text-emerald-neon font-bold text-[10px] uppercase tracking-widest hover:bg-emerald-neon/20 transition-all flex items-center justify-center gap-2"
+                >
+                  <RotateCw className="w-3 h-3" />
+                  Reupload Media
+                </button>
+              </div>
+            )}
           </motion.div>
         ) : (
           <motion.div 
@@ -249,35 +289,57 @@ const PanelScreen = () => {
                   </div>
                   <div>
                     <h4 className="text-xs font-bold uppercase tracking-widest">Network Stream</h4>
-                    <p className="text-[9px] text-gray-500 uppercase tracking-tighter">Source Configuration</p>
+                    <p className="text-[9px] text-gray-500 uppercase tracking-tighter">{isStreamActive ? 'Live Connection' : 'Source Configuration'}</p>
                   </div>
                 </div>
-                <span className="text-[8px] font-bold bg-emerald-neon/10 text-emerald-neon px-2 py-1 rounded border border-emerald-neon/20 uppercase tracking-widest">RTSP / RTMP</span>
+                <div className="flex items-center gap-2">
+                   {isStreamActive && <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />}
+                   <span className="text-[8px] font-bold bg-emerald-neon/10 text-emerald-neon px-2 py-1 rounded border border-emerald-neon/20 uppercase tracking-widest">RTSP / RTMP</span>
+                </div>
               </div>
 
-              <div className="space-y-2">
-                <label className="text-[10px] uppercase tracking-widest font-bold text-gray-500">Stream URL</label>
-                <input 
-                  id="streamUrlInput"
-                  type="text" 
-                  placeholder="rtsp://your-server-address:554/live"
-                  className="w-full bg-bg-dark border border-border-dark rounded-xl px-4 py-3 text-xs font-mono text-emerald-neon placeholder:text-gray-700 focus:outline-none focus:border-emerald-neon/50 transition-colors"
-                />
-              </div>
+              {!isStreamActive ? (
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-[10px] uppercase tracking-widest font-bold text-gray-500">Stream URL</label>
+                    <input 
+                      id="streamUrlInput"
+                      type="text" 
+                      defaultValue={streamUrl}
+                      placeholder="rtsp://your-server-address:554/live"
+                      className="w-full bg-bg-dark border border-border-dark rounded-xl px-4 py-3 text-xs font-mono text-emerald-neon placeholder:text-gray-700 focus:outline-none focus:border-emerald-neon/50 transition-colors"
+                    />
+                  </div>
 
-              <button 
-                onClick={() => {
-                  const url = (document.getElementById('streamUrlInput') as HTMLInputElement).value;
-                  (window as any).Android?.connectStream(url);
-                }}
-                className="w-full bg-emerald-neon text-bg-dark font-bold py-4 rounded-2xl flex items-center justify-center gap-2 hover:brightness-110 transition-all shadow-[0_0_20px_rgba(16,185,129,0.2)]"
-              >
-                <Play className="w-4 h-4 fill-current" />
-                <span className="uppercase tracking-widest text-xs">Connect Stream</span>
-              </button>
+                  <button 
+                    onClick={() => {
+                      const url = (document.getElementById('streamUrlInput') as HTMLInputElement).value;
+                      (window as any).Android?.connectStream(url);
+                    }}
+                    className="w-full bg-emerald-neon text-bg-dark font-bold py-4 rounded-2xl flex items-center justify-center gap-2 hover:brightness-110 transition-all shadow-[0_0_20px_rgba(16,185,129,0.2)]"
+                  >
+                    <Play className="w-4 h-4 fill-current" />
+                    <span className="uppercase tracking-widest text-xs">Connect Stream</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                   <div className="bg-bg-dark/50 border border-border-dark rounded-xl p-4 flex flex-col gap-1">
+                      <span className="text-[8px] uppercase tracking-widest font-bold text-gray-600">Active Endpoint</span>
+                      <span className="text-[10px] font-mono text-emerald-neon truncate">{streamUrl}</span>
+                   </div>
+                   <button 
+                    onClick={() => (window as any).Android?.connectStream(streamUrl)}
+                    className="w-full py-3 rounded-2xl bg-emerald-neon/10 border border-emerald-neon/20 text-emerald-neon font-bold text-[10px] uppercase tracking-widest hover:bg-emerald-neon/20 transition-all flex items-center justify-center gap-2"
+                  >
+                    <RotateCw className="w-3 h-3" />
+                    Reconnect Stream
+                  </button>
+                </div>
+              )}
               
               <p className="text-[9px] text-center text-gray-600 leading-relaxed">
-                Connect to OBS stream to enable you control virtual camera input seamlessly.
+                {isStreamActive ? 'Connected to remote source. Signals will automatically update the feed.' : 'Connect to OBS stream to enable you control virtual camera input seamlessly.'}
               </p>
             </div>
           </motion.div>
@@ -437,11 +499,8 @@ export default function App() {
 
   // Synchronization with Android state
   useEffect(() => {
-    const handleSync = (json: string) => {
-      try {
-        const config = JSON.parse(json);
-        console.log('Android Config Synced:', config);
-        // We'll trust the sync signal and mark as ready
+        const data = typeof json === 'string' ? JSON.parse(json) : json;
+        window.dispatchEvent(new CustomEvent('android-sync', { detail: data }));
         setIsSynced(true);
       } catch (e) {
         console.error('Sync failed', e);
