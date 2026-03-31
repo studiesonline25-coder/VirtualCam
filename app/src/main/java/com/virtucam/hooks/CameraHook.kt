@@ -2228,14 +2228,16 @@ class VirtualRenderThread(
     private var mediaSurface: Surface? = null
     private var frameCount = 0
 
-    private fun getTargetRatio(vW: Int, vH: Int, isCapture: Boolean): Float {
+    private fun getTargetRatio(vW: Int, vH: Int, isCapture: Boolean, mediaW: Int, mediaH: Int): Float {
         return try {
-            // Return authentic hardware ratio multiplied by user's 'stretch' manual override.
-            // A factor of 1.0 results in mathematically perfect 1:1 geometry.
-            // A factor of 1.33 corrects a 16:9 phone to a 4:3 viewfinder.
-            (vW.toFloat() / vH.toFloat()) * CameraHook.compensationFactor
+            // [Regression Restore] Use fixed 16:9 / 9:16 baselines based on MEDIA orientation.
+            // This ensures gallery parity (black bars) regardless of screen hardware.
+            val isMediaPortrait = mediaH > mediaW
+            val baseRatio = if (isMediaPortrait) (9.0f / 16.0f) else (16.0f / 9.0f)
+            
+            baseRatio * CameraHook.compensationFactor
         } catch (e: Exception) {
-            1.0f
+            (vW.toFloat() / vH.toFloat()) * CameraHook.compensationFactor
         }
     }
 
@@ -2428,8 +2430,8 @@ class VirtualRenderThread(
                      false
                  }
 
-                 val ratio = getTargetRatio(vw, vh, isCapture)
-                 if (frameCount % 30 == 0) Log.d("VirtuCam_Render", "Drawing: ratio=$ratio, stretch=${CameraHook.compensationFactor}, zoom=${CameraHook.zoomFactor}, rot=$applyRotation+${CameraHook.rotation}")
+                 val ratio = getTargetRatio(vw, vh, isCapture, contentW, contentH)
+                 if (frameCount % 30 == 0) Log.d("VirtuCam_Render", "Drawing: ratio=$ratio, stretch=${CameraHook.compensationFactor}, zoom=${CameraHook.zoomFactor}, media=${contentW}x${contentH}")
                  textureRenderer?.draw(matrix, contentW, contentH, vw, vh, ratio, applyRotation, CameraHook.rotation, shouldMirror, CameraHook.zoomFactor)
 
                  if (eglCore?.swapBuffers(es) == false) {
