@@ -90,7 +90,7 @@ const FrameControl = () => {
           </div>
           <input 
             type="range" 
-            min="0.5" 
+            min="0.1" 
             max="3.0" 
             step="0.01" 
             value={zoom} 
@@ -107,8 +107,8 @@ const FrameControl = () => {
           </div>
           <input 
             type="range" 
-            min="0.5" 
-            max="2.5" 
+            min="0.1" 
+            max="3.0" 
             step="0.01" 
             value={stretch} 
             onChange={(e) => updateStretch(parseFloat(e.target.value))}

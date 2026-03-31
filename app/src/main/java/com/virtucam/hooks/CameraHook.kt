@@ -2231,19 +2231,19 @@ class VirtualRenderThread(
     private fun getTargetRatio(vW: Int, vH: Int, isCapture: Boolean, mediaW: Int, mediaH: Int): Float {
         return try {
             if (isCapture) {
-                // [WYSIWYG Deep Fix] Use real surface dimensions for the final photo.
-                // This prevents 'Vertical Flattening' by ensuring the renderer fits 
-                // the media into the authentic 4:3 (or other) shape of the file.
-                (vW.toFloat() / vH.toFloat()) * CameraHook.compensationFactor
+                // [WYSIWYG Fix] Capture surfaces (photos) must use their AUTHENTIC geometric ratio.
+                // This prevents the "Vertical Flattening" caused by forcing a 9:16 portrait container
+                // onto a 4:3 horizontal capture buffer.
+                vW.toFloat() / vH.toFloat()
             } else {
-                // [Gallery Parity] For the phone viewfinder, maintain the 16:9/9:16 baselines.
-                // This preserves the 'Black Bars' look the user prefers for preview.
+                // [Viewfinder Parity] For the phone's UI preview, we maintain the requested 16:9/9:16 baselines.
+                // This preserves the "Cinematic" framing the user prefers during setup.
                 val isMediaPortrait = mediaH > mediaW
                 val baseRatio = if (isMediaPortrait) (9.0f / 16.0f) else (16.0f / 9.0f)
                 baseRatio * CameraHook.compensationFactor
             }
         } catch (e: Exception) {
-            (vW.toFloat() / vH.toFloat()) * CameraHook.compensationFactor
+            vW.toFloat() / vH.toFloat()
         }
     }
 
@@ -2426,17 +2426,18 @@ class VirtualRenderThread(
 
                  // DYNAMIC MIRRORING LOGIC (The "Veriff" Fix)
                  // Some apps (Veriff) skip preview mirroring. Native cameras mirror in UI.
-                 // Sense Front-Camera: Strictly follow the tracked cameraFacing (1=FRONT).
-                 val isActuallyFront = (isFrontCamera)
-                 val shouldMirror = if (isActuallyFront) {
+                 // Sense Front-Camera: If isFrontCamera property is true OR sensorOrientation is 270 (Common Front-Cam).
+                 val isActuallyFront = isFrontCamera || sensorOrientation == 270
+                 val shouldMirror = if (isActuallyFront && !isXiaomiCam) {
                      // Mirror ImageReaders (Veriff preview/capture) so text is not backwards.
                      (format == 35 || format == 34 || format == 0x100)
                  } else {
-                     false
+                     // Native Xiaomi handles mirroring in UI; only flip if user toggled manual Mirror.
+                     CameraHook.isMirrored
                  }
 
                  val ratio = getTargetRatio(vw, vh, isCapture, contentW, contentH)
-                 if (frameCount % 30 == 0) Log.d("VirtuCam_Render", "Drawing: ratio=$ratio, stretch=${CameraHook.compensationFactor}, zoom=${CameraHook.zoomFactor}, media=${contentW}x${contentH}")
+                 if (frameCount % 30 == 0) Log.d("VirtuCam_Render", "Drawing: ratio=$ratio, isFront=$isActuallyFront, mirror=$shouldMirror, stretch=${CameraHook.compensationFactor}")
                  textureRenderer?.draw(matrix, contentW, contentH, vw, vh, ratio, applyRotation, CameraHook.rotation, shouldMirror, CameraHook.zoomFactor)
 
                  if (eglCore?.swapBuffers(es) == false) {
