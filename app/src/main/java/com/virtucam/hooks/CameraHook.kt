@@ -2369,7 +2369,7 @@ class VirtualRenderThread(
                                 android.media.ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.preScale(1f, -1f)
                                 else -> null // No rotation needed
                             }?.let {
-                                val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+                                val rotated = android.graphics.Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
                                 if (rotated != bitmap) bitmap.recycle()
                                 rotated
                             } ?: bitmap
