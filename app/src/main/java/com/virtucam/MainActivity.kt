@@ -215,7 +215,7 @@ class MainActivity : AppCompatActivity() {
         Thread {
             try {
                 val bitmap = if (isVideo) {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
                         contentResolver.loadThumbnail(uri, android.util.Size(320, 240), null)
                     } else {
                          // Fallback for older Android
@@ -223,7 +223,39 @@ class MainActivity : AppCompatActivity() {
                     }
                 } else {
                     val inputStream = contentResolver.openInputStream(uri)
-                    android.graphics.BitmapFactory.decodeStream(inputStream)
+                    val rawBitmap = android.graphics.BitmapFactory.decodeStream(inputStream)
+                    inputStream?.close()
+
+                    if (rawBitmap != null) {
+                        try {
+                            val exifStream = contentResolver.openInputStream(uri)
+                            if (exifStream != null) {
+                                val exif = android.media.ExifInterface(exifStream)
+                                val orientation = exif.getAttributeInt(
+                                    android.media.ExifInterface.TAG_ORIENTATION,
+                                    android.media.ExifInterface.ORIENTATION_NORMAL
+                                )
+                                exifStream.close()
+
+                                val matrix = android.graphics.Matrix()
+                                val rotation = when (orientation) {
+                                    android.media.ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+                                    android.media.ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+                                    android.media.ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+                                    else -> 0f
+                                }
+
+                                if (rotation != 0f) {
+                                    matrix.postRotate(rotation)
+                                    val rotated = android.graphics.Bitmap.createBitmap(
+                                        rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, matrix, true
+                                    )
+                                    if (rotated != rawBitmap) rawBitmap.recycle()
+                                    rotated
+                                } else rawBitmap
+                            } else rawBitmap
+                        } catch (e: Exception) { rawBitmap }
+                    } else null
                 }
 
                 bitmap?.let {

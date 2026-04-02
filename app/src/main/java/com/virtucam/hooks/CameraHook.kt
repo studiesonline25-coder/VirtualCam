@@ -2229,6 +2229,7 @@ class VirtualRenderThread(
     
     @Volatile
     private var isRunning = true
+    private var isSourceAlreadyNormalized = false // Track if EXIF rotation was already applied
     
     private var eglCore: EglCore? = null
     // Triple: EGLSurface, isCapture, format
@@ -2361,18 +2362,27 @@ class VirtualRenderThread(
                             exifStream.close()
                             
                             val matrix = android.graphics.Matrix()
-                            when (orientation) {
-                                android.media.ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
-                                android.media.ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
-                                android.media.ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
-                                android.media.ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.preScale(-1f, 1f)
-                                android.media.ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.preScale(1f, -1f)
-                                else -> null // No rotation needed
-                            }?.let {
+                            val rotation = when (orientation) {
+                                android.media.ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+                                android.media.ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+                                android.media.ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+                                android.media.ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> -1f // Simplified for now
+                                android.media.ExifInterface.ORIENTATION_FLIP_VERTICAL -> -2f
+                                else -> 0f
+                            }
+                            
+                            if (rotation != 0f) {
+                                if (rotation > 0) matrix.postRotate(rotation)
+                                else if (rotation == -1f) matrix.preScale(-1f, 1f)
+                                else if (rotation == -2f) matrix.preScale(1f, -1f)
+                                
                                 val rotated = android.graphics.Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-                                if (rotated != bitmap) bitmap.recycle()
+                                if (rotated != bitmap) {
+                                    bitmap.recycle()
+                                    isSourceAlreadyNormalized = true // Source is now UPIGHT regardless of sensor
+                                }
                                 rotated
-                            } ?: bitmap
+                            } else bitmap
                         } else bitmap
                     } catch (e: Exception) {
                         Log.e("VirtuCam_Render", "EXIF rotation failed, using raw bitmap", e)
@@ -2466,26 +2476,34 @@ class VirtualRenderThread(
                  // [Browser Detection] Chrome/WebRTC reads REAL sensor orientation (90°) at native C++ HAL level,
                  // bypassing our Java hooks. It applies -90° correction to our already-upright frames.
                  // Pre-rotate +90° so Chrome's -90° cancels to 0° (upright).
-                 val isBrowser = CameraHook.targetPackage?.let { pkg ->
+                 val pkg = CameraHook.targetPackage ?: ""
+                 val isBrowser = (
                      pkg.contains("chrome", true) || pkg.contains("browser", true) ||
                      pkg.contains("webview", true) || pkg.contains("veriff", true) ||
                      pkg.contains("firefox", true) || pkg.contains("opera", true) ||
                      pkg.contains("samsung.sbrowser", true) || pkg.contains("brave", true)
-                 } ?: false
+                 )
                  
                  var applyRotation = if (isCapture) {
-                     // [Rotation Fix] Apply sensor orientation to captures to fix 270-degree thumbnail tilt
-                     sensorOrientation
+                     // [Normalization] If source was already rotated to upright via EXIF, 
+                     // don't apply the sensor orientation again (v-flip/h-flip already handled).
+                     if (isSourceAlreadyNormalized) 0 else sensorOrientation
                  } else if (isBrowser) {
-                     // [Veriff Fix] Pre-rotate for browser's native -90° HAL correction
-                     90
+                     // [Veriff Fix] Pre-rotate for browser's native -90° HAL correction.
+                     // Chromium (Phoenix) needs 90. Firefox typically needs 270 (-90).
+                     if (pkg.contains("firefox", true)) 270 else 90
                  } else {
                      0
                  }
 
+                 // [Normalization Check] Static images that are ALREADY upright should skip preview rotation
+                 if (!isCapture && !isBrowser && isSourceAlreadyNormalized) {
+                     applyRotation = 0
+                 }
+
                  // [WYSIWYG Rotation Fix] Auto-rotate sideways if filling a landscape buffer with portrait video
                  if (isCapture && sensorOrientation == 0 && contentH > contentW && vw > vh) {
-                     applyRotation = 90
+                     if (!isSourceAlreadyNormalized) applyRotation = 90
                  }
 
                  // DYNAMIC MIRRORING LOGIC (The "Veriff" Fix)
@@ -2502,7 +2520,9 @@ class VirtualRenderThread(
                  }
 
                  val ratio = getTargetRatio(vw, vh, isCapture, contentW, contentH)
-                 if (frameCount % 30 == 0) Log.d("VirtuCam_Render", "Drawing: ratio=$ratio, isFront=$isActuallyFront, mirror=$shouldMirror, fmt=$format")
+                 if (frameCount % 30 == 0) {
+                     Log.d("VirtuCam_Render", "PKG: $pkg, Drawing: ratio=$ratio, rot=$applyRotation, manual=${CameraHook.rotation}, norm=$isSourceAlreadyNormalized, target=$format")
+                 }
                  textureRenderer?.draw(matrix, contentW, contentH, vw, vh, ratio, applyRotation, CameraHook.rotation, shouldMirror, CameraHook.zoomFactor, isCapture)
 
                  if (eglCore?.swapBuffers(es) == false) {
