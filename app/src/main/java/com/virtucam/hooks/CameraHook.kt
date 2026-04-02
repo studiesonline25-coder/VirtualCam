@@ -2348,10 +2348,41 @@ class VirtualRenderThread(
                 stream?.close()
                 
                 if (bitmap != null) {
-                    textureRenderer!!.loadBitmap(bitmap)
-                    val staticImageW = bitmap.width
-                    val staticImageH = bitmap.height
-                    bitmap.recycle()
+                    // [EXIF Rotation Fix] BitmapFactory.decodeStream() ignores EXIF orientation.
+                    // For spoofed photos (sideways pixels + EXIF 6), we must apply the rotation manually.
+                    val rotatedBitmap = try {
+                        val exifStream = context.contentResolver.openInputStream(uri)
+                        if (exifStream != null) {
+                            val exif = android.media.ExifInterface(exifStream)
+                            val orientation = exif.getAttributeInt(
+                                android.media.ExifInterface.TAG_ORIENTATION,
+                                android.media.ExifInterface.ORIENTATION_NORMAL
+                            )
+                            exifStream.close()
+                            
+                            val matrix = android.graphics.Matrix()
+                            when (orientation) {
+                                android.media.ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+                                android.media.ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+                                android.media.ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+                                android.media.ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.preScale(-1f, 1f)
+                                android.media.ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.preScale(1f, -1f)
+                                else -> null // No rotation needed
+                            }?.let {
+                                val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+                                if (rotated != bitmap) bitmap.recycle()
+                                rotated
+                            } ?: bitmap
+                        } else bitmap
+                    } catch (e: Exception) {
+                        Log.e("VirtuCam_Render", "EXIF rotation failed, using raw bitmap", e)
+                        bitmap
+                    }
+                    
+                    textureRenderer!!.loadBitmap(rotatedBitmap)
+                    val staticImageW = rotatedBitmap.width
+                    val staticImageH = rotatedBitmap.height
+                    rotatedBitmap.recycle()
                     
                     val matrix = FloatArray(16)
                     Matrix.setIdentityM(matrix, 0)
@@ -2431,9 +2462,23 @@ class VirtualRenderThread(
                  // [WYSIWYG Fix] For com.android.camera, we use 0 rotation for everything (YUV/JPEG/Preview).
                  // For others (Veriff), YUV/PRIVATE follows physical sensor orientation.
                  val isXiaomiCam = (CameraHook.targetPackage == "com.android.camera" || CameraHook.targetPackage == "com.xiaomi.camera")
+                 
+                 // [Browser Detection] Chrome/WebRTC reads REAL sensor orientation (90°) at native C++ HAL level,
+                 // bypassing our Java hooks. It applies -90° correction to our already-upright frames.
+                 // Pre-rotate +90° so Chrome's -90° cancels to 0° (upright).
+                 val isBrowser = CameraHook.targetPackage?.let { pkg ->
+                     pkg.contains("chrome", true) || pkg.contains("browser", true) ||
+                     pkg.contains("webview", true) || pkg.contains("veriff", true) ||
+                     pkg.contains("firefox", true) || pkg.contains("opera", true) ||
+                     pkg.contains("samsung.sbrowser", true) || pkg.contains("brave", true)
+                 } ?: false
+                 
                  var applyRotation = if (isCapture) {
                      // [Rotation Fix] Apply sensor orientation to captures to fix 270-degree thumbnail tilt
                      sensorOrientation
+                 } else if (isBrowser) {
+                     // [Veriff Fix] Pre-rotate for browser's native -90° HAL correction
+                     90
                  } else {
                      0
                  }
