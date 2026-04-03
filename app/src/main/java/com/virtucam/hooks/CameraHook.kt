@@ -2438,9 +2438,13 @@ class VirtualRenderThread(
                      0
                  }
 
-                 // [WYSIWYG Rotation Fix] Auto-rotate sideways if filling a landscape buffer with portrait video
-                 if (isCapture && sensorOrientation == 0 && contentH > contentW && vw > vh) {
-                     applyRotation = 90
+                 // [Adaptive Orientation Correction] 
+                 // If filling a landscape buffer with portrait video (Veriff behavior in Browsers), auto-rotate.
+                 if (!isXiaomiCam && contentH > contentW && vw > vh) {
+                     applyRotation = (applyRotation + 90) % 360
+                     if (frameCount % 60 == 0) {
+                        Log.d("VirtuCam_Render", "DIAGNOSTIC_VIRTUCAM: Creator Log [Adaptive Rot] - Mismatch Detected! Source=${contentW}x${contentH}, Surface=${vw}x${vh}, ApplyRot=$applyRotation")
+                     }
                  }
 
                  // DYNAMIC MIRRORING LOGIC (The "Veriff" Fix)
