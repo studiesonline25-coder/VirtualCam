@@ -158,11 +158,20 @@ class FormatConverterBridge(
                     val tempFile = java.io.File(context.cacheDir, "vc_exif_inject_${System.currentTimeMillis()}.jpg")
                     tempFile.writeBytes(jpegBytes)
                     val exif = android.media.ExifInterface(tempFile.absolutePath)
-                    exif.setAttribute(android.media.ExifInterface.TAG_ORIENTATION, "6") // Rotate 90 CW
+                    
+                    // Convert our internal 0-360 rotation to ExifInterface orientation constants
+                    val exifValue = when (totalRotation % 360) {
+                        90 -> "6"  // Rotate 90 CW
+                        180 -> "3" // Rotate 180
+                        270 -> "8" // Rotate 270 CW
+                        else -> "1" // Normal
+                    }
+                    
+                    exif.setAttribute(android.media.ExifInterface.TAG_ORIENTATION, exifValue)
                     exif.saveAttributes()
                     jpegBytes = tempFile.readBytes()
                     tempFile.delete()
-                    Log.d("DIAGNOSTIC_VIRTUCAM", "FormatConverterBridge: Embedded EXIF Orientation=6 into JPEG payload")
+                    Log.d("DIAGNOSTIC_VIRTUCAM", "FormatConverterBridge: Embedded EXIF Orientation=$exifValue (Rot=$totalRotation) into JPEG payload")
                 }
             } catch (e: Throwable) {
                 Log.e("DIAGNOSTIC_VIRTUCAM", "FormatConverterBridge: Failed EXIF injection", e)

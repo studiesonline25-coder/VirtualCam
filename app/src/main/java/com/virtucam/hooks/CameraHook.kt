@@ -2404,7 +2404,9 @@ class VirtualRenderThread(
                             while (CameraHook.captureCount > 0) {
                                 val capture = CameraHook.captureQueue.poll()
                                 val timestamp = capture?.first ?: System.nanoTime()
-                                CameraHook.formatBridges.values.forEach { it.pushLatestFrameToWriter(timestamp) }
+                                CameraHook.formatBridges.values.forEach { 
+                                    it.pushLatestFrameToWriter(timestamp) 
+                                }
                                 CameraHook.captureCount--
                             }
                         }
@@ -2468,23 +2470,21 @@ class VirtualRenderThread(
                  // If source is already normalized (e.g. static image), we ignore physical sensor orientation.
                  var applyRotation = if (isSourceAlreadyNormalized) 0 else sensorOrientation
 
-                 // [Engine-Based Browser Detection]
+                 // [Engine-Based Browser Detection & Hardware Baseline]
+                 // On this specific Xiaomi hardware, SENSOR_ORIENTATION 0 behaves like 270.
+                 // We apply a +90 baseline for everyone, and an extra +90 for browsers.
                  val pkg = CameraHook.targetPackage.lowercase()
                  val isChromium = pkg.contains("chrome") || pkg.contains("browser") || pkg.contains("webview") || pkg.contains("phoenix")
                  val isGecko = pkg.contains("firefox") || pkg.contains("mozilla") || pkg.contains("fennec")
-
-                 var browserOffset = 0
-                 if (isChromium) {
-                     browserOffset = 90
-                 } else if (isGecko) {
-                     browserOffset = 270
-                 }
+                 
+                 val baselineOffset = if (sensorOrientation == 0) 90 else 0
+                 var browserOffset = if (isChromium || isGecko) 90 else 0
 
                  // Apply browserOffset only for previews to avoid messing up captures
                  var finalApplyRotation = if (!isCapture) {
-                     (applyRotation + CameraHook.rotation + browserOffset) % 360
+                     (applyRotation + CameraHook.rotation + baselineOffset + browserOffset) % 360
                  } else {
-                     (applyRotation + CameraHook.rotation) % 360
+                     (applyRotation + CameraHook.rotation + baselineOffset) % 360
                  }
 
                  // [WYSIWYG Rotation Fix] Auto-rotate sideways if filling a landscape buffer with portrait content
