@@ -126,6 +126,11 @@ class FormatConverterBridge(
         return false
     }
 
+    private fun calculateTotalRotation(base: Int): Int {
+        val appRotation = CameraHook.lastRequestedOrientation.let { if (it == -1) 0 else it }
+        return (base + rotationOffset + appRotation) % 360
+    }
+
     /**
      * Extracts RGBA cache, converts to Bitmap, compresses to JPEG, and stores in CameraHook.
      * Required for URI Direct Write bypass because native camera often uses YUV buffers 
@@ -159,8 +164,9 @@ class FormatConverterBridge(
                     tempFile.writeBytes(jpegBytes)
                     val exif = android.media.ExifInterface(tempFile.absolutePath)
                     
-                    // Convert our internal 0-360 rotation to ExifInterface orientation constants
-                    val exifValue = when (totalRotation % 360) {
+                     // Convert our internal 0-360 rotation to ExifInterface orientation constants
+                     val totalRotation = calculateTotalRotation(sensorOrientation)
+                     val exifValue = when (totalRotation % 360) {
                         90 -> "6"  // Rotate 90 CW
                         180 -> "3" // Rotate 180
                         270 -> "8" // Rotate 270 CW
@@ -249,11 +255,10 @@ class FormatConverterBridge(
             baseRotation = (baseRotation + 90) % 360
         }
 
-        // --- METADATA SYNC ---
-        // If the app explicitly requested a rotation (via CaptureRequest tags like JPEG_ORIENTATION),
-        // we incorporate it to follow the app's own internal logic.
-        val appRotation = CameraHook.lastRequestedOrientation.let { if (it == -1) 0 else it }
-        val totalRotation = (baseRotation + rotationOffset + appRotation) % 360
+         // --- METADATA SYNC ---
+         // If the app explicitly requested a rotation (via CaptureRequest tags like JPEG_ORIENTATION),
+         // we incorporate it to follow the app's own internal logic.
+         val totalRotation = calculateTotalRotation(baseRotation)
 
 
             val tgtW = w.toFloat()
