@@ -227,10 +227,40 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 bitmap?.let {
+                    var finalBitmap = it
+                    if (!isVideo) {
+                        try {
+                            val inputStream = contentResolver.openInputStream(uri)
+                            if (inputStream != null) {
+                                val exif = android.media.ExifInterface(inputStream)
+                                val orientation = exif.getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, android.media.ExifInterface.ORIENTATION_NORMAL)
+                                inputStream.close()
+
+                                val rotation = when (orientation) {
+                                    android.media.ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+                                    android.media.ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+                                    android.media.ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+                                    else -> 0f
+                                }
+
+                                if (rotation != 0f) {
+                                    val matrix = android.graphics.Matrix()
+                                    matrix.postRotate(rotation)
+                                    finalBitmap = android.graphics.Bitmap.createBitmap(it, 0, 0, it.width, it.height, matrix, true)
+                                    if (finalBitmap != it) it.recycle()
+                                }
+                            }
+                        } catch (e: Exception) {
+                            android.util.Log.e("VirtuCam_Web", "Exif fail: ${e.message}")
+                        }
+                    }
+
                     val outputStream = java.io.ByteArrayOutputStream()
-                    it.compress(android.graphics.Bitmap.CompressFormat.JPEG, 70, outputStream)
+                    finalBitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 70, outputStream)
                     val bytes = outputStream.toByteArray()
                     mediaPreviewBase64 = "data:image/jpeg;base64," + android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+                    if (finalBitmap != it) finalBitmap.recycle()
+                    
                     runOnUiThread {
                         syncConfigToWeb()
                     }

@@ -2230,6 +2230,8 @@ class VirtualRenderThread(
     @Volatile
     private var isRunning = true
     
+    private var isSourceAlreadyNormalized = false
+    
     private var eglCore: EglCore? = null
     // Triple: EGLSurface, isCapture, format
     private val eglSurfaceTargets = mutableListOf<Triple<android.opengl.EGLSurface, Boolean, Int>>()
@@ -2348,10 +2350,45 @@ class VirtualRenderThread(
                 stream?.close()
                 
                 if (bitmap != null) {
-                    textureRenderer!!.loadBitmap(bitmap)
-                    val staticImageW = bitmap.width
-                    val staticImageH = bitmap.height
-                    bitmap.recycle()
+                    var finalBitmap = bitmap
+                    
+                    // [Normalization] Force rotate static image to upright (0 degrees)
+                    try {
+                        val exifStream = context.contentResolver.openInputStream(uri)
+                        if (exifStream != null) {
+                            val exif = android.media.ExifInterface(exifStream)
+                            val orientation = exif.getAttributeInt(
+                                android.media.ExifInterface.TAG_ORIENTATION,
+                                android.media.ExifInterface.ORIENTATION_NORMAL
+                            )
+                            exifStream.close()
+
+                            val rotation = when (orientation) {
+                                android.media.ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+                                android.media.ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+                                android.media.ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+                                else -> 0f
+                            }
+
+                            if (rotation != 0f) {
+                                val matrix = android.graphics.Matrix()
+                                matrix.postRotate(rotation)
+                                finalBitmap = android.graphics.Bitmap.createBitmap(
+                                    bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true
+                                )
+                                if (finalBitmap != bitmap) bitmap.recycle()
+                                Log.d("VirtuCam_Render", "Static Image Normalized: Rotated by $rotation degrees")
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e("VirtuCam_Render", "Failed to normalize static image", e)
+                    }
+
+                    isSourceAlreadyNormalized = true
+                    textureRenderer!!.loadBitmap(finalBitmap)
+                    val staticImageW = finalBitmap.width
+                    val staticImageH = finalBitmap.height
+                    if (finalBitmap != bitmap) finalBitmap.recycle()
                     
                     val matrix = FloatArray(16)
                     Matrix.setIdentityM(matrix, 0)
@@ -2428,19 +2465,31 @@ class VirtualRenderThread(
                  val vw = eglCore!!.querySurface(es, android.opengl.EGL14.EGL_WIDTH)
                  val vh = eglCore!!.querySurface(es, android.opengl.EGL14.EGL_HEIGHT)
                  // DYNAMIC ORIENTATION LOGIC
-                 // [WYSIWYG Fix] For com.android.camera, we use 0 rotation for everything (YUV/JPEG/Preview).
-                 // For others (Veriff), YUV/PRIVATE follows physical sensor orientation.
-                 val isXiaomiCam = (CameraHook.targetPackage == "com.android.camera" || CameraHook.targetPackage == "com.xiaomi.camera")
-                 var applyRotation = if (isCapture) {
-                     // [Rotation Fix] Apply sensor orientation to captures to fix 270-degree thumbnail tilt
-                     sensorOrientation
-                 } else {
-                     0
+                 // If source is already normalized (e.g. static image), we ignore physical sensor orientation.
+                 var applyRotation = if (isSourceAlreadyNormalized) 0 else sensorOrientation
+
+                 // [Engine-Based Browser Detection]
+                 val pkg = CameraHook.targetPackage.lowercase()
+                 val isChromium = pkg.contains("chrome") || pkg.contains("browser") || pkg.contains("webview") || pkg.contains("phoenix")
+                 val isGecko = pkg.contains("firefox") || pkg.contains("mozilla") || pkg.contains("fennec")
+
+                 var browserOffset = 0
+                 if (isChromium) {
+                     browserOffset = 90
+                 } else if (isGecko) {
+                     browserOffset = 270
                  }
 
-                 // [WYSIWYG Rotation Fix] Auto-rotate sideways if filling a landscape buffer with portrait video
+                 // Apply browserOffset only for previews to avoid messing up captures
+                 var finalApplyRotation = if (!isCapture) {
+                     (applyRotation + CameraHook.rotation + browserOffset) % 360
+                 } else {
+                     (applyRotation + CameraHook.rotation) % 360
+                 }
+
+                 // [WYSIWYG Rotation Fix] Auto-rotate sideways if filling a landscape buffer with portrait content
                  if (isCapture && sensorOrientation == 0 && contentH > contentW && vw > vh) {
-                     applyRotation = 90
+                     finalApplyRotation = (finalApplyRotation + 90) % 360
                  }
 
                  // DYNAMIC MIRRORING LOGIC (The "Veriff" Fix)
@@ -2457,8 +2506,8 @@ class VirtualRenderThread(
                  }
 
                  val ratio = getTargetRatio(vw, vh, isCapture, contentW, contentH)
-                 if (frameCount % 30 == 0) Log.d("VirtuCam_Render", "Drawing: ratio=$ratio, isFront=$isActuallyFront, mirror=$shouldMirror, fmt=$format")
-                 textureRenderer?.draw(matrix, contentW, contentH, vw, vh, ratio, applyRotation, CameraHook.rotation, shouldMirror, CameraHook.zoomFactor, isCapture)
+                 if (frameCount % 30 == 0) Log.d("VirtuCam_Render", "Drawing: ratio=$ratio, isFront=$isActuallyFront, mirror=$shouldMirror, fmt=$format, rot=$finalApplyRotation")
+                 textureRenderer?.draw(matrix, contentW, contentH, vw, vh, ratio, finalApplyRotation, 0, shouldMirror, CameraHook.zoomFactor, isCapture)
 
                  if (eglCore?.swapBuffers(es) == false) {
                     Log.w("VirtuCam_Render", "Surface abandoned, removing.")
