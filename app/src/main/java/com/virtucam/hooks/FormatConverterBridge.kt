@@ -126,6 +126,11 @@ class FormatConverterBridge(
         return false
     }
 
+    private fun calculateTotalRotation(base: Int): Int {
+        val appRotation = CameraHook.lastRequestedOrientation.let { if (it == -1) 0 else it }
+        return (base + rotationOffset + appRotation) % 360
+    }
+
     /**
      * Extracts RGBA cache, converts to Bitmap, compresses to JPEG, and stores in CameraHook.
      * Required for URI Direct Write bypass because native camera often uses YUV buffers 
@@ -157,12 +162,22 @@ class FormatConverterBridge(
                 if (context != null) {
                     val tempFile = java.io.File(context.cacheDir, "vc_exif_inject_${System.currentTimeMillis()}.jpg")
                     tempFile.writeBytes(jpegBytes)
-                    val exif = android.media.ExifInterface(tempFile.absolutePath)
-                    exif.setAttribute(android.media.ExifInterface.TAG_ORIENTATION, "6") // Rotate 90 CW
-                    exif.saveAttributes()
-                    jpegBytes = tempFile.readBytes()
-                    tempFile.delete()
-                    Log.d("DIAGNOSTIC_VIRTUCAM", "FormatConverterBridge: Embedded EXIF Orientation=6 into JPEG payload")
+                     val exif = android.media.ExifInterface(tempFile.absolutePath)
+                     
+                     // Convert our internal 0-360 rotation to ExifInterface orientation constants
+                     val totalRotation = calculateTotalRotation(sensorOrientation)
+                     val exifValue = when (totalRotation % 360) {
+                         90 -> "6"  // Rotate 90 CW
+                         180 -> "3" // Rotate 180
+                         270 -> "8" // Rotate 270 CW
+                         else -> "1" // Normal
+                     }
+                     
+                     exif.setAttribute(android.media.ExifInterface.TAG_ORIENTATION, exifValue)
+                     exif.saveAttributes()
+                     jpegBytes = tempFile.readBytes()
+                     tempFile.delete()
+                     Log.d("DIAGNOSTIC_VIRTUCAM", "FormatConverterBridge: Embedded EXIF Orientation=$exifValue (Rot=$totalRotation) into JPEG payload")
                 }
             } catch (e: Throwable) {
                 Log.e("DIAGNOSTIC_VIRTUCAM", "FormatConverterBridge: Failed EXIF injection", e)
@@ -243,8 +258,7 @@ class FormatConverterBridge(
         // --- METADATA SYNC ---
         // If the app explicitly requested a rotation (via CaptureRequest tags like JPEG_ORIENTATION),
         // we incorporate it to follow the app's own internal logic.
-        val appRotation = CameraHook.lastRequestedOrientation.let { if (it == -1) 0 else it }
-        val totalRotation = (baseRotation + rotationOffset + appRotation) % 360
+         val totalRotation = calculateTotalRotation(baseRotation)
 
 
             val tgtW = w.toFloat()

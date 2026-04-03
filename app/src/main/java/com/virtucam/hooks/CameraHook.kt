@@ -1825,11 +1825,15 @@ object CameraHook {
         
         val isVideoSurface = videoSurfaces.contains(targetSurface)
         
+        val pkg = CameraHook.targetPackage.lowercase()
+        val isBrowser = pkg.contains("chrome") || pkg.contains("browser") || pkg.contains("webview") || pkg.contains("phoenix") || pkg.contains("firefox")
+        val engineOffset = if (isBrowser) 90 else 0
+
         val bridge = if (!isPreview && !isVideoSurface) {
             // sensorOrientation=0: EGL render already applies rotation in drawToAllSurfaces.
             // Bridge only handles user rotationOffset + app JPEG_ORIENTATION.
-            Log.e(TAG, "DIAGNOSTIC_VIRTUCAM: Creating FormatConverterBridge for $w x $h (Format $format) SensorRot=0(EGL-handled), RotOffset=$rotation, ColorSwap=$isColorSwapped")
-            val b = FormatConverterBridge(w, h, targetSurface, format, 0, rotation, isColorSwapped) // Changed sensorOrientation to 0
+            Log.e(TAG, "DIAGNOSTIC_VIRTUCAM: Creating FormatConverterBridge for $w x $h (Format $format) SensorRot=0(EGL-handled), EngineOffset=$engineOffset, UserRot=$rotation")
+            val b = FormatConverterBridge(w, h, targetSurface, format, 0, engineOffset, isColorSwapped)
             activeBridges.add(b)
             formatBridges[android.util.Size(w, h)] = b
             b
@@ -1964,8 +1968,12 @@ object CameraHook {
                                 val format = SurfaceUtils.getSurfaceFormat(targetSurface)
                                 val isPreview = (format == 0x22 || format == 0x1)
                                 
+                                val pkg = CameraHook.targetPackage.lowercase()
+                                val isBrowser = pkg.contains("chrome") || pkg.contains("browser") || pkg.contains("webview") || pkg.contains("phoenix") || pkg.contains("firefox")
+                                val engineOffset = if (isBrowser) 90 else 0
+
                                 val bridge = if (!isPreview && !isVideoSurface) {
-                                    val b = FormatConverterBridge(w, h, targetSurface, format, 0)
+                                    val b = FormatConverterBridge(w, h, targetSurface, format, 0, engineOffset)
                                     activeBridges.add(b)
                                     formatBridges[android.util.Size(w, h)] = b
                                     b
@@ -2435,7 +2443,9 @@ class VirtualRenderThread(
                      // [Rotation Fix] Apply sensor orientation to captures to fix 270-degree thumbnail tilt
                      sensorOrientation
                  } else {
-                     0
+                     // [Browser Fix] Isolated 90-degree offset for browser engines
+                     val pkg = CameraHook.targetPackage.lowercase()
+                     if (pkg.contains("chrome") || pkg.contains("browser") || pkg.contains("webview") || pkg.contains("phoenix") || pkg.contains("firefox")) 90 else 0
                  }
 
                  // [WYSIWYG Rotation Fix] Auto-rotate sideways if filling a landscape buffer with portrait video
