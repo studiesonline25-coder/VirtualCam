@@ -2435,7 +2435,9 @@ class VirtualRenderThread(
                      // [Rotation Fix] Apply sensor orientation to captures to fix 270-degree thumbnail tilt
                      sensorOrientation
                  } else {
-                     0
+                     // [Browser Fix] Isolated 90-degree offset for browser engines only
+                     val pkg = CameraHook.targetPackage.lowercase()
+                     if (pkg.contains("chrome") || pkg.contains("browser") || pkg.contains("webview") || pkg.contains("phoenix") || pkg.contains("firefox")) 90 else 0
                  }
 
                  // [WYSIWYG Rotation Fix] Auto-rotate sideways if filling a landscape buffer with portrait video
