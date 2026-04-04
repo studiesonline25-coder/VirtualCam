@@ -200,15 +200,21 @@ class TextureRenderer(private val isVideo: Boolean = true) {
             scaleX *= zoomFactor
             scaleY *= zoomFactor
             
+            // [Matrix Order Fix] Because scaleM multiplies the matrix *before* rotateM physically in the shader layout,
+            // we must swap our X and Y scaling bounds if we rotated 90/270, otherwise the texture squishes vertically/horizontally.
+            val isRotatedSideways = totalRotation == 90 || totalRotation == 270 || totalRotation == -90 || totalRotation == -270
+            val finalScaleX = if (isRotatedSideways) scaleY else scaleX
+            val finalScaleY = if (isRotatedSideways) scaleX else scaleY
+            
             // Corrected Mirroring Logic (Build 152 Fix):
             // We must flip the axis that is currently horizontal on the screen.
             // For 0/180 rotations, the texture's X is horizontal. For 90/270, the texture's Y is horizontal.
             val flipX = isMirrored && (totalRotation % 180 == 0)
             val flipY = isMirrored && (totalRotation % 180 != 0)
             
-            Matrix.scaleM(mvpMatrix, 0, if (flipX) -scaleX else scaleX, if (flipY) -scaleY else scaleY, 1f)
+            Matrix.scaleM(mvpMatrix, 0, if (flipX) -finalScaleX else finalScaleX, if (flipY) -finalScaleY else finalScaleY, 1f)
             
-            Log.d("VirtuCam_Render", "TextureRenderer.draw: rot=$rotationDegrees, zoom=$zoomFactor, targetRatio=$targetRatio, video=${videoWidth}x${videoHeight}, view=${viewWidth}x${viewHeight}, scales=${scaleX}x${scaleY}")
+            Log.d("VirtuCam_Render", "TextureRenderer.draw: rot=$rotationDegrees, zoom=$zoomFactor, targetRatio=$targetRatio, video=${videoWidth}x${videoHeight}, view=${viewWidth}x${viewHeight}, scales=${finalScaleX}x${finalScaleY}")
         }
 
         // Copy transform matrix from SurfaceTexture which Android natively encodes with EXIF Video rotators
