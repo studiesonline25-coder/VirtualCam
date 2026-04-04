@@ -2245,16 +2245,12 @@ class VirtualRenderThread(
     private fun getTargetRatio(vW: Int, vH: Int, isCapture: Boolean, mediaW: Int, mediaH: Int): Float {
         return try {
             if (isCapture) {
-                // [WYSIWYG Fix] Capture surfaces (photos) must use their AUTHENTIC geometric ratio.
-                // This prevents the "Vertical Flattening" caused by forcing a 9:16 portrait container
-                // onto a 4:3 horizontal capture buffer.
+                // Captures keep authentic geometric math (WYSIWYG)
                 vW.toFloat() / vH.toFloat()
             } else {
-                // [Viewfinder Parity] For the phone's UI preview, we maintain the requested 16:9/9:16 baselines.
-                // This preserves the "Cinematic" framing the user prefers during setup.
-                val isMediaPortrait = mediaH > mediaW
-                val baseRatio = if (isMediaPortrait) (9.0f / 16.0f) else (16.0f / 9.0f)
-                baseRatio * CameraHook.compensationFactor
+                // Previews now also use authentic geometric map to trigger FIT_CENTER correctly, 
+                // avoiding any stretching by placing black bars naturally.
+                (vW.toFloat() / vH.toFloat()) * CameraHook.compensationFactor
             }
         } catch (e: Exception) {
             vW.toFloat() / vH.toFloat()
