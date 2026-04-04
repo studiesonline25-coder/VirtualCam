@@ -2438,9 +2438,22 @@ class VirtualRenderThread(
                      0
                  }
 
-                 // [WYSIWYG Rotation Fix] Auto-rotate sideways if filling a landscape buffer with portrait video
+                 // [WYSIWYG Layer 1] Original Build 213 Fix for Native Camera Captures
+                 // Preserves "perfect" capture/gallery behavior for Xiaomi Cam.
                  if (isCapture && sensorOrientation == 0 && contentH > contentW && vw > vh) {
                      applyRotation = 90
+                 }
+
+                 // [WYSIWYG Layer 2] Surgical Fix for Browser Previews (Veriff)
+                 // Detects when browsers ask for landscape surfaces for portrait video.
+                 val pkg = CameraHook.targetPackage.lowercase()
+                 val isBrowser = (pkg.contains("chrome") || pkg.contains("browser") || pkg.contains("webview") || pkg.contains("phoenix") || pkg.contains("firefox") || pkg.contains("veriff"))
+                 
+                 if (!isCapture && isBrowser && contentH > contentW && vw > vh) {
+                     applyRotation = 90
+                     if (frameCount % 60 == 0) {
+                        Log.d("VirtuCam_Render", "DIAGNOSTIC_VIRTUCAM: Creator Log [Adaptive Browser Fix] - Mismatch Detected! Source=${contentW}x${contentH}, Target=${vw}x${vh}, FinalRot=$applyRotation")
+                     }
                  }
 
                  // DYNAMIC MIRRORING LOGIC (The "Veriff" Fix)
