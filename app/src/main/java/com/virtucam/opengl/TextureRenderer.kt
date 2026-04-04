@@ -85,6 +85,7 @@ class TextureRenderer(private val isVideo: Boolean = true) {
     private var maTextureHandle = 0
     
     internal var textureId = -1
+    private var frameCount = 0
     
     private val vertexBuffer: FloatBuffer
     private val textureBuffer: FloatBuffer
@@ -219,7 +220,7 @@ class TextureRenderer(private val isVideo: Boolean = true) {
                 Matrix.scaleM(mvpMatrix, 0, if (flipX) -scaleX else scaleX, if (flipY) -scaleY else scaleY, 1f)
             }
             
-            if (frameCount % 60 == 0) {
+            if (frameCount++ % 60 == 0) {
                 Log.d("VirtuCam_Render", "Draw: media=${videoWidth}x${videoHeight} view=${viewWidth}x${viewHeight} rot=$totalRotation scales=${scaleX}x${scaleY}")
             }
         }
