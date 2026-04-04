@@ -2342,11 +2342,36 @@ class VirtualRenderThread(
                 val bitmap = BitmapFactory.decodeStream(stream)
                 stream?.close()
                 
+                var exifRotationDegrees = 0
+                try {
+                    val exifStream = context.contentResolver.openInputStream(uri)
+                    if (exifStream != null) {
+                        val exif = android.media.ExifInterface(exifStream)
+                        val orientation = exif.getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, android.media.ExifInterface.ORIENTATION_NORMAL)
+                        exifRotationDegrees = when (orientation) {
+                            android.media.ExifInterface.ORIENTATION_ROTATE_90 -> 90
+                            android.media.ExifInterface.ORIENTATION_ROTATE_180 -> 180
+                            android.media.ExifInterface.ORIENTATION_ROTATE_270 -> 270
+                            else -> 0
+                        }
+                        exifStream.close()
+                    }
+                } catch (e: Exception) {
+                    Log.e("VirtuCam_Render", "Failed to parse EXIF rotation for static image: ${e.message}")
+                }
+                
                 if (bitmap != null) {
                     textureRenderer!!.loadBitmap(bitmap)
-                    val staticImageW = bitmap.width
-                    val staticImageH = bitmap.height
+                    var staticImageW = bitmap.width
+                    var staticImageH = bitmap.height
                     bitmap.recycle()
+                    
+                    // Hardware decoders generally pass matrix natively, static images do not. 
+                    // We must manually apply rotation to the geometry bounds to preserve aspect ratio.
+                    if (exifRotationDegrees == 90 || exifRotationDegrees == 270) {
+                        staticImageW = bitmap.height
+                        staticImageH = bitmap.width
+                    }
                     
                     val matrix = FloatArray(16)
                     Matrix.setIdentityM(matrix, 0)
@@ -2355,7 +2380,7 @@ class VirtualRenderThread(
                         frameCount++
                         if (frameCount % 10 == 0) CameraHook.loadConfiguration()
 
-                        if (!drawToAllSurfaces(matrix, staticImageW, staticImageH)) break
+                        if (!drawToAllSurfaces(matrix, staticImageW, staticImageH, exifRotationDegrees)) break
                         
                         // Handle Photo/Capture Requests (Static Image)
                         synchronized(CameraHook) {
@@ -2411,7 +2436,7 @@ class VirtualRenderThread(
         }
     }
 
-    private fun drawToAllSurfaces(matrix: FloatArray, contentW: Int, contentH: Int): Boolean {
+    private fun drawToAllSurfaces(matrix: FloatArray, contentW: Int, contentH: Int, explicitRotationOffset: Int = 0): Boolean {
         val it = eglSurfaceTargets.iterator()
         while (it.hasNext()) {
             val it_triple = it.next()
@@ -2437,6 +2462,8 @@ class VirtualRenderThread(
                  if (isCapture && sensorOrientation == 0 && contentH > contentW && vw > vh) {
                      applyRotation = 90
                  }
+                 
+                 val finalApplyRotation = (applyRotation + explicitRotationOffset) % 360
 
                  // DYNAMIC MIRRORING LOGIC (The "Veriff" Fix)
                  // Some apps (Veriff) skip preview mirroring. Native cameras mirror in UI.
@@ -2453,7 +2480,7 @@ class VirtualRenderThread(
 
                  val ratio = getTargetRatio(vw, vh, isCapture, contentW, contentH)
                  if (frameCount % 30 == 0) Log.d("VirtuCam_Render", "Drawing: ratio=$ratio, isFront=$isActuallyFront, mirror=$shouldMirror, fmt=$format")
-                 textureRenderer?.draw(matrix, contentW, contentH, vw, vh, ratio, applyRotation, CameraHook.rotation, shouldMirror, CameraHook.zoomFactor, isCapture)
+                 textureRenderer?.draw(matrix, contentW, contentH, vw, vh, ratio, finalApplyRotation, CameraHook.rotation, shouldMirror, CameraHook.zoomFactor, isCapture)
 
                  if (eglCore?.swapBuffers(es) == false) {
                     Log.w("VirtuCam_Render", "Surface abandoned, removing.")
