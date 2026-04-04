@@ -208,7 +208,11 @@ class TextureRenderer(private val isVideo: Boolean = true) {
             
             Matrix.scaleM(mvpMatrix, 0, if (flipX) -scaleX else scaleX, if (flipY) -scaleY else scaleY, 1f)
             
-            Log.d("VirtuCam_Render", "TextureRenderer.draw: rot=$rotationDegrees, zoom=$zoomFactor, targetRatio=$targetRatio, video=${videoWidth}x${videoHeight}, view=${viewWidth}x${viewHeight}, scales=${scaleX}x${scaleY}")
+            Log.e("DIAGNOSTIC_VIRTUCAM", "TextureRenderer.draw Metrics:\n" +
+                "  Rotation Args: rotationDegrees=$rotationDegrees userRotation=$userRotation total=$totalRotation\n" +
+                "  Ratio Logic: viewRatio=$viewRatio videoRatioFallback=$videoRatioFallback effVideoRatio=$effectiveVideoRatio targetRatio=${targetRatio}\n" +
+                "  Input Dims: video=${videoWidth}x${videoHeight} view=${viewWidth}x${viewHeight}\n" +
+                "  Output Scale Matrix: scaleX=$scaleX scaleY=$scaleY flipX=$flipX flipY=$flipY zoom=$zoomFactor")
         }
 
         // Copy transform matrix from SurfaceTexture which Android natively encodes with EXIF Video rotators

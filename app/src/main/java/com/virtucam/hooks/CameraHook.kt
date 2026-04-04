@@ -2246,15 +2246,17 @@ class VirtualRenderThread(
         return try {
             if (isCapture) {
                 // [WYSIWYG Fix] Capture surfaces (photos) must use their AUTHENTIC geometric ratio.
-                // This prevents the "Vertical Flattening" caused by forcing a 9:16 portrait container
-                // onto a 4:3 horizontal capture buffer.
-                vW.toFloat() / vH.toFloat()
+                val valRatio = vW.toFloat() / vH.toFloat()
+                Log.e("DIAGNOSTIC_VIRTUCAM", "getTargetRatio(Capture): vW=$vW vH=$vH mediaW=$mediaW mediaH=$mediaH -> Using Auth Ratio ($valRatio)")
+                valRatio
             } else {
                 // [Viewfinder Parity] For the phone's UI preview, we maintain the requested 16:9/9:16 baselines.
                 // This preserves the "Cinematic" framing the user prefers during setup.
                 val isMediaPortrait = mediaH > mediaW
                 val baseRatio = if (isMediaPortrait) (9.0f / 16.0f) else (16.0f / 9.0f)
-                baseRatio * CameraHook.compensationFactor
+                val finalRatio = baseRatio * CameraHook.compensationFactor
+                Log.e("DIAGNOSTIC_VIRTUCAM", "getTargetRatio(Preview): vW=$vW vH=$vH mediaW=$mediaW mediaH=$mediaH -> Hardcoded Base ($baseRatio) * Comp (${CameraHook.compensationFactor}) = $finalRatio")
+                finalRatio
             }
         } catch (e: Exception) {
             vW.toFloat() / vH.toFloat()
@@ -2347,10 +2349,28 @@ class VirtualRenderThread(
                 val bitmap = BitmapFactory.decodeStream(stream)
                 stream?.close()
                 
+                // Add Diagnostic Telemetry - Read EXIF without applying it
+                var diagnosticExifRotation = 0
+                try {
+                    val exifStream = context.contentResolver.openInputStream(uri)
+                    if (exifStream != null) {
+                        val exif = android.media.ExifInterface(exifStream)
+                        val orientation = exif.getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION, android.media.ExifInterface.ORIENTATION_NORMAL)
+                        diagnosticExifRotation = when (orientation) {
+                            android.media.ExifInterface.ORIENTATION_ROTATE_90 -> 90
+                            android.media.ExifInterface.ORIENTATION_ROTATE_180 -> 180
+                            android.media.ExifInterface.ORIENTATION_ROTATE_270 -> 270
+                            else -> 0
+                        }
+                        exifStream.close()
+                    }
+                } catch (e: Exception) {}
+                
                 if (bitmap != null) {
                     textureRenderer!!.loadBitmap(bitmap)
                     val staticImageW = bitmap.width
                     val staticImageH = bitmap.height
+                    Log.e("DIAGNOSTIC_VIRTUCAM", "Static Image Loaded: W=$staticImageW, H=$staticImageH, ExifRotation=$diagnosticExifRotation, Pkg=${CameraHook.targetPackage}")
                     bitmap.recycle()
                     
                     val matrix = FloatArray(16)
