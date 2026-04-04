@@ -2439,7 +2439,8 @@ class VirtualRenderThread(
                  }
 
                  // [WYSIWYG Rotation Fix] Auto-rotate sideways if filling a landscape buffer with portrait video
-                 if (isCapture && sensorOrientation == 0 && contentH > contentW && vw > vh) {
+                 // Restricted to native Xiaomi camera only - browsers/WebRTC handle rotation via metadata
+                 if (isXiaomiCam && isCapture && sensorOrientation == 0 && contentH > contentW && vw > vh) {
                      applyRotation = 90
                  }
 
@@ -2458,6 +2459,7 @@ class VirtualRenderThread(
 
                  val ratio = getTargetRatio(vw, vh, isCapture, contentW, contentH)
                  if (frameCount % 30 == 0) Log.d("VirtuCam_Render", "Drawing: ratio=$ratio, isFront=$isActuallyFront, mirror=$shouldMirror, fmt=$format")
+                 if (frameCount % 60 == 0) Log.e("DIAGNOSTIC_VIRTUCAM", "Creator Log [Render] pkg=${CameraHook.targetPackage}, isCapture=$isCapture, content=${contentW}x${contentH}, surface=${vw}x${vh}, sensorOri=$sensorOrientation, applyRot=$applyRotation, manualRot=${CameraHook.rotation}, fmt=$format")
                  textureRenderer?.draw(matrix, contentW, contentH, vw, vh, ratio, applyRotation, CameraHook.rotation, shouldMirror, CameraHook.zoomFactor, isCapture)
 
                  if (eglCore?.swapBuffers(es) == false) {
