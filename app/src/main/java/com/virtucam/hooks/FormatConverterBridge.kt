@@ -228,38 +228,43 @@ class FormatConverterBridge(
             val srcW = width.toFloat()
             val srcH = height.toFloat()
         
-        // DYNAMIC LOGIC: If target is Landscape but source is Portrait (or vice versa), 
-        // we likely need a 90/270 rotation regardless of sensorOrientation.
-        val targetIsLandscape = w > h
-        val sourceIsLandscape = width > height
-        
-        var baseRotation = sensorOrientation
-        if (targetIsLandscape != sourceIsLandscape) {
-            // Force a 90-degree compensation if orientations mismatch
-            // This fixes the "sideways in browser" issue identified in your audio!
-            baseRotation = (baseRotation + 90) % 360
-        }
+            val context = android.app.AndroidAppHelper.currentApplication()
+            var zoom = CameraHook.zoomFactor
+            var comp = CameraHook.compensationFactor
+            var userRot = CameraHook.rotation
+            
+            // [Multi-Process Sync] MiAlgoEngine often runs in a background process.
+            // Force reload from disk to stay in sync with UI sliders.
+            if (context != null) {
+                try {
+                    val config = com.virtucam.data.VirtuCamConfig.getInstance(context)
+                    zoom = config.zoomFactor
+                    comp = config.compensationFactor
+                    userRot = config.rotation
+                } catch (_: Exception) {}
+            }
 
-        // --- METADATA SYNC ---
-        // If the app explicitly requested a rotation (via CaptureRequest tags like JPEG_ORIENTATION),
-        // we incorporate it to follow the app's own internal logic.
-        val appRotation = CameraHook.lastRequestedOrientation.let { if (it == -1) 0 else it }
-        val totalRotation = (baseRotation + rotationOffset + appRotation) % 360
-
+            // --- UNIFIED ROTATION SYNC ---
+            // Force bridge to match the confirmed upright rotation from Build 214.5.
+            val appRotation = CameraHook.lastRequestedOrientation.let { if (it == -1) 0 else it }
+            val totalRotation = (sensorOrientation + userRot + rotationOffset + appRotation) % 360
 
             val tgtW = w.toFloat()
             val tgtH = h.toFloat()
 
-            val zoom = CameraHook.zoomFactor
-            val comp = CameraHook.compensationFactor
+            // Calculate base source dimensions
+            val baseSrcW = if (totalRotation % 180 == 0) width.toFloat() else height.toFloat()
+            val baseSrcH = if (totalRotation % 180 == 0) height.toFloat() else width.toFloat()
 
-            // Calculate effective source dimensions after sensor rotation AND zoom/stretch
-            // If rotating 90/270, source's logic width/height are swapped
-            // [WYSIWYG Synchronicity] Divide by zoom and compensation to match the preview renderer
-            val logicSrcW = (if (totalRotation % 180 == 0) width.toFloat() else height.toFloat()) / zoom
-            val logicSrcH = (if (totalRotation % 180 == 0) height.toFloat() else width.toFloat()) / (zoom * comp)
+            // Apply Compensation (Stretch) to the logic width to squash width vs height
+            // Multiplier > 1.0 makes content 'thinner' (Vertical Stretch relative to screen).
+            val logicSrcW = baseSrcW * comp
+            val logicSrcH = baseSrcH
             
-            val scale = Math.max(tgtW / logicSrcW, tgtH / logicSrcH)
+            // SCALE: Calculate to fill the target (CENTER_CROP) then apply zoom
+            val baseScale = Math.max(tgtW / logicSrcW, tgtH / logicSrcH)
+            val scale = baseScale * zoom
+            
             val offsetX = (logicSrcW - tgtW / scale) / 2f
             val offsetY = (logicSrcH - tgtH / scale) / 2f
 
