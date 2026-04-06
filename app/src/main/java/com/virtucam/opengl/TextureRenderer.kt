@@ -138,7 +138,10 @@ class TextureRenderer(private val isVideo: Boolean = true) {
     /**
      * Draw the texture to currently bound frame buffer
      */
-    fun draw(transformMatrix: FloatArray, videoWidth: Int = 0, videoHeight: Int = 0, viewWidth: Int = 0, viewHeight: Int = 0, targetRatio: Float = 0f, rotationDegrees: Int = 0, userRotation: Int = 0, isMirrored: Boolean = false, zoomFactor: Float = 1.0f, isCapture: Boolean = false) {
+    fun draw(transformMatrix: FloatArray, videoWidth: Int = 0, videoHeight: Int = 0, viewWidth: Int = 0, viewHeight: Int = 0, 
+             targetRatio: Float = 0f, rotationDegrees: Int = 0, userRotation: Int = 0, 
+             isMirrored: Boolean = false, zoomFactor: Float = 1.0f, isCapture: Boolean = false,
+             compensationFactor: Float = 1.0f) {
         if (viewWidth > 0 && viewHeight > 0) {
             GLES20.glViewport(0, 0, viewWidth, viewHeight)
         }
@@ -165,7 +168,7 @@ class TextureRenderer(private val isVideo: Boolean = true) {
             val orientedViewW = if (totalRotation % 180 != 0) viewHeight else viewWidth
             val orientedViewH = if (totalRotation % 180 != 0) viewWidth else viewHeight
             
-            val userSeenRatio = orientedViewW.toFloat() / orientedViewH.toFloat()
+            val userSeenRatio = (orientedViewW.toFloat() / orientedViewH.toFloat()) * compensationFactor
             
             // [Zero-Error Accuracy] 2.1 Calculate Effective Media Ratio
             // If the media is being rotated 90/270, its width and height are effectively swapped.

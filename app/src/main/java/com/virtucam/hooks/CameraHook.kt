@@ -2471,7 +2471,7 @@ class VirtualRenderThread(
                  }
 
                  val ratio = getTargetRatio(vw, vh, isCapture, contentW, contentH)
-                 textureRenderer?.draw(matrix, contentW, contentH, vw, vh, ratio, finalApplyRotation, CameraHook.rotation, shouldMirror, CameraHook.zoomFactor, isCapture)
+                 textureRenderer?.draw(matrix, contentW, contentH, vw, vh, ratio, finalApplyRotation, CameraHook.rotation, shouldMirror, CameraHook.zoomFactor, isCapture, CameraHook.compensationFactor)
 
                  if (eglCore?.swapBuffers(es) == false) {
                     Log.w("VirtuCam_Render", "Surface abandoned, removing.")
