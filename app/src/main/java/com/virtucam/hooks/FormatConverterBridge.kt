@@ -131,59 +131,62 @@ class FormatConverterBridge(
      * Required for URI Direct Write bypass because native camera often uses YUV buffers 
      * but writes JPEGs to the sandboxed disk later.
      */
-    private fun generateAndStoreSpoofedJpeg(): ByteArray? {
+    private fun generateAndStoreSpoofedJpeg() {
         val rgbaBytes = cachedRgbaData
-        if (rgbaBytes == null || !checkDataIntegrity(rgbaBytes)) return null
+        if (rgbaBytes == null || !checkDataIntegrity(rgbaBytes)) return
         
-        val expectedSize = width * height * 4
-        if (rgbaBytes.size < expectedSize) return null
+        // [SHUTTER OPTIMIZATION] Throttle: only one bridge processes JPEG at a time
+        if (CameraHook.isGeneratingJpeg) return
         
-        try {
-            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-            val rgbaBuffer = ByteBuffer.wrap(rgbaBytes)
-            bitmap.copyPixelsFromBuffer(rgbaBuffer)
-            
-            val baos = ByteArrayOutputStream()
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 85, baos)
-            bitmap.recycle()
-            
-            var jpegBytes = baos.toByteArray()
-            
-            // [WYSIWYG EXIF INJECTION] 
-            // Bitmap.compress does not write EXIF tags. Without tags, the Gallery displays the file 
-            // sideways since we mathematically rotated it array-wise to use CENTER_CROP perfectly.
+        val w = width
+        val h = height
+        
+        Thread {
             try {
-                val context = android.app.AndroidAppHelper.currentApplication()
-                if (context != null) {
-                    val tempFile = java.io.File(context.cacheDir, "vc_exif_inject_${System.currentTimeMillis()}.jpg")
-                    tempFile.writeBytes(jpegBytes)
-                    val exif = android.media.ExifInterface(tempFile.absolutePath)
-                    exif.setAttribute(android.media.ExifInterface.TAG_ORIENTATION, "1") // Normal (0 deg)
-                    exif.saveAttributes()
-                    jpegBytes = tempFile.readBytes()
-                    tempFile.delete()
-                    Log.d("DIAGNOSTIC_VIRTUCAM", "FormatConverterBridge: Embedded EXIF Orientation=1 into JPEG payload")
+                CameraHook.isGeneratingJpeg = true
+                Log.d(TAG, "FormatConverterBridge: Async JPEG start for ${w}x${h}")
+                
+                val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                val rgbaBuffer = ByteBuffer.wrap(rgbaBytes)
+                bitmap.copyPixelsFromBuffer(rgbaBuffer)
+                
+                val baos = ByteArrayOutputStream()
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 85, baos)
+                bitmap.recycle()
+                
+                var jpegBytes = baos.toByteArray()
+                
+                // EXIF INJECTION
+                try {
+                    val context = android.app.AndroidAppHelper.currentApplication()
+                    if (context != null) {
+                        val tempFile = java.io.File(context.cacheDir, "vc_exif_inject_${System.currentTimeMillis()}.jpg")
+                        tempFile.writeBytes(jpegBytes)
+                        val exif = android.media.ExifInterface(tempFile.absolutePath)
+                        exif.setAttribute(android.media.ExifInterface.TAG_ORIENTATION, "1")
+                        exif.saveAttributes()
+                        jpegBytes = tempFile.readBytes()
+                        tempFile.delete()
+                    }
+                } catch (e: Throwable) {
+                    Log.e(TAG, "Exif inject fail", e)
                 }
-            } catch (e: Throwable) {
-                Log.e("DIAGNOSTIC_VIRTUCAM", "FormatConverterBridge: Failed EXIF injection", e)
-            }
-            
-            val area = width * height
-            synchronized(CameraHook) {
-                if (area >= CameraHook.latestVirtualJpegArea) {
-                    CameraHook.latestVirtualJpeg = jpegBytes
-                    CameraHook.latestVirtualJpegArea = area
-                    Log.d(TAG, "FormatConverterBridge: Stored Virtual JPEG (${jpegBytes.size} bytes) for late-stage interception (Area: $area)")
-                } else {
-                    Log.d(TAG, "FormatConverterBridge: Discarding ${width}x${height} JPEG, a larger capture already won the race.")
+                
+                val area = w * h
+                synchronized(CameraHook) {
+                    if (area >= CameraHook.latestVirtualJpegArea) {
+                        CameraHook.latestVirtualJpeg = jpegBytes
+                        CameraHook.latestVirtualJpegArea = area
+                        Log.d(TAG, "FormatConverterBridge: Stored Virtual JPEG (${jpegBytes.size} bytes) (Area: $area)")
+                    }
                 }
+            } catch (e: Exception) {
+                Log.e(TAG, "Async JPEG generation failed", e)
+            } finally {
+                CameraHook.isGeneratingJpeg = false
+                Log.d(TAG, "FormatConverterBridge: Async JPEG done.")
             }
-            
-            return jpegBytes
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to generate spoofed JPEG", e)
-            return null
-        }
+        }.start()
     }
 
     /**

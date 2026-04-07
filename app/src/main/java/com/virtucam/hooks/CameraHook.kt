@@ -97,6 +97,9 @@ object CameraHook {
     var isColorSwapped: Boolean = false
 
     @Volatile
+    var isGeneratingJpeg: Boolean = false
+
+    @Volatile
     var compensationFactor: Float = 1.0f
     
     @Volatile
