@@ -10,10 +10,21 @@ import com.virtucam.VirtuCamApp
  */
 class VirtuCamConfig(context: Context) {
     
-    private val prefs = context.getSharedPreferences(
+    private var prefs = context.getSharedPreferences(
         VirtuCamApp.PREFS_NAME, 
         Context.MODE_PRIVATE
     )
+    
+    /**
+     * Force a reload of the preferences from disk.
+     * Essential for multi-process synchronization (e.g. Xiaomi MiAlgoEngine).
+     */
+    fun reload(context: Context) {
+        prefs = context.getSharedPreferences(
+            VirtuCamApp.PREFS_NAME,
+            Context.MODE_PRIVATE
+        )
+    }
     
     /**
      * Whether VirtuCam is enabled

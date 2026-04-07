@@ -238,13 +238,19 @@ class FormatConverterBridge(
             
             // [Multi-Process Sync] MiAlgoEngine often runs in a background process.
             // Force reload from disk to stay in sync with UI sliders.
+            // [Multi-Process Sync] MiAlgoEngine often runs in a background process (e.g. mialgo_service).
+            // Force reload from disk to stay in sync with UI sliders.
             if (context != null) {
                 try {
                     val config = com.virtucam.data.VirtuCamConfig.getInstance(context)
+                    config.reload(context) // FORCE DISK SYNC
                     zoom = config.zoomFactor
                     comp = config.compensationFactor
                     userRot = config.rotation
-                } catch (_: Exception) {}
+                    Log.d(TAG, "DIAGNOSTIC_VIRTUCAM: Force-Reloaded Config in MiAlgo. Comp=$comp, Zoom=$zoom, Rot=$userRot")
+                } catch (e: Exception) {
+                    Log.e(TAG, "DIAGNOSTIC_VIRTUCAM: Failed to reload config in MiAlgo: ${e.message}")
+                }
             }
 
             // --- UNIFIED ROTATION SYNC ---
@@ -262,13 +268,14 @@ class FormatConverterBridge(
             Log.d(TAG, "DIAGNOSTIC_VIRTUCAM: Intercepting YUV Capture. Target=${w}x${h}, Bridge=${width}x${height}, SensorRot=$sensorOrientation, Zoom=$zoom, Comp=$comp, Rot=$totalRotation")
 
             // Apply Compensation (Stretch) to the logic width to squash width vs height
-            // Multiplier > 1.0 makes content 'thinner' (Vertical Stretch relative to screen).
+            // Multiplier < 1.0 (e.g. 0.59) makes content 'wider' (Stretches contents horizontally).
+            // Multiplier > 1.0 makes content 'thinner'.
             val logicSrcW = baseSrcW * comp
             val logicSrcH = baseSrcH
             
             // --- FIT_CENTER STRATEGY ---
             // Use Math.min (Fit-Center) to fill as much as possible without cropping margins.
-            // This matches the Preview's 'Pillarbox' behavior if ratios mismatch.
+            // This ensures that the 16:9 preview content is visible within the 4:3 capture box.
             val baseScale = Math.min(tgtW / logicSrcW, tgtH / logicSrcH)
             val scale = baseScale * zoom
             
