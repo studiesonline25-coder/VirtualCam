@@ -137,26 +137,50 @@ class VirtuCamConfig(context: Context) {
     }
     
     /**
-     * ATOMIC DISK SYNC: Reads the latest value directly from the XML file on disk.
-     * This is essential for background processes (e.g., MiAlgoEngine) which Android 
-     * SharedPreferences fails to synchronize due to internal process-level caching.
+     * ATOMIC DISK SYNC (Global): Reads values from the physical data partition.
+     * Bypasses Android's process-level sandbox isolation by trying absolute paths.
      */
-    fun getFloatDirectSync(context: Context, key: String, default: Float): Float {
-        try {
-            val prefsFile = java.io.File(context.filesDir.parentFile, "shared_prefs/${VirtuCamApp.PREFS_NAME}.xml")
-            if (!prefsFile.exists()) return default
-            
-            val content = prefsFile.readText()
-            // Pattern for <float name="key" value="0.59" />
-            val pattern = "name=\"$key\"\\s+value=\"([\\d\\.-]+)\"".toRegex()
-            val match = pattern.find(content)
-            if (match != null) {
-                return match.groupValues[1].toFloat()
+    fun getFloatDirectSync(context: Context?, key: String, default: Float): Float {
+        // Try multiple possible paths to overcome different process user/root mappings
+        val possiblePaths = listOf(
+            "/data/user/0/com.virtucam/shared_prefs/${VirtuCamApp.PREFS_NAME}.xml",
+            "/data/data/com.virtucam/shared_prefs/${VirtuCamApp.PREFS_NAME}.xml"
+        )
+        
+        for (path in possiblePaths) {
+            try {
+                val prefsFile = java.io.File(path)
+                if (!prefsFile.exists()) {
+                    android.util.Log.v("DIAGNOSTIC_VIRTUCAM", "DirectSync: Path not found: $path")
+                    continue
+                }
+                if (!prefsFile.canRead()) {
+                    android.util.Log.e("DIAGNOSTIC_VIRTUCAM", "DirectSync: PERMISSION DENIED for $path")
+                    continue
+                }
+                
+                val content = prefsFile.readText()
+                // Pattern for <float name="key" value="0.59" />
+                val pattern = "name=\"$key\"\\s+value=\"([\\d\\.-]+)\"".toRegex()
+                val match = pattern.find(content)
+                if (match != null) {
+                    val value = match.groupValues[1].toFloat()
+                    android.util.Log.d("DIAGNOSTIC_VIRTUCAM", "DirectSync: Successfully read $key=$value from $path")
+                    return value
+                } else {
+                    android.util.Log.e("DIAGNOSTIC_VIRTUCAM", "DirectSync: Key $key not found in XML at $path")
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("DIAGNOSTIC_VIRTUCAM", "DirectSync: Error reading $path: ${e.message}")
             }
-        } catch (e: Exception) {
-            android.util.Log.e("VirtuCam_Config", "Direct disk sync failed for $key: ${e.message}")
         }
-        return prefs.getFloat(key, default)
+        
+        // Final fallback to memory/context if file fails
+        return try {
+            prefs.getFloat(key, default)
+        } catch (_: Exception) {
+            default
+        }
     }
 
     /**
