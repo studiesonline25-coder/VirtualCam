@@ -1474,7 +1474,8 @@ object CameraHook {
             return null
         }
     }
-}
+
+    /**
      * BEFORE they even call `createCaptureSession`! When this happens, our `addTarget` hook misses the swap
      * because our `surfaceMap` is empty.
      * To definitively prevent the fatal "CaptureRequest contains unconfigured Input/Output Surface" crash, we intercept
