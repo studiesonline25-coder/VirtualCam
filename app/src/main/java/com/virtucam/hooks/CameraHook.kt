@@ -998,6 +998,7 @@ object CameraHook {
     /**
      * Hook CameraCaptureSession.capture() and setRepeatingRequest() to intercept
      * the CaptureCallback and identify the exact moment a photo is taken.
+     * Also extracts Metadata Courier (Build 215.4) for cross-process sync.
      */
     private fun hookCaptureCallback(lpparam: XC_LoadPackage.LoadPackageParam) {
         val sessionClass = XposedHelpers.findClassIfExists(
@@ -1008,11 +1009,13 @@ object CameraHook {
             override fun beforeHookedMethod(param: MethodHookParam) {
                 try {
                     if (!isEnabled) return
-                    val callbackIndex = if (param.method.name == "capture") 1 else 1
+                    val callbackIndex = 1
                     val originalCallback = if (param.args.size > callbackIndex) param.args[callbackIndex] as? android.hardware.camera2.CameraCaptureSession.CaptureCallback else null
                     
                     if (originalCallback == null) return
                     
+                    val isSingleCapture = param.method.name == "capture" || param.method.name == "captureBurst"
+
                     // Wrap the original callback to intercept onCaptureCompleted
                     val wrappedCallback = object : android.hardware.camera2.CameraCaptureSession.CaptureCallback() {
                         override fun onCaptureStarted(session: android.hardware.camera2.CameraCaptureSession, request: android.hardware.camera2.CaptureRequest, timestamp: Long, frameNumber: Long) {
@@ -1021,24 +1024,40 @@ object CameraHook {
                         
                         override fun onCaptureCompleted(session: android.hardware.camera2.CameraCaptureSession, request: android.hardware.camera2.CaptureRequest, result: android.hardware.camera2.TotalCaptureResult) {
                             try {
-                                // 1. Intercept capture count for bridge triggering
-                                if (param.method.name == "capture") {
-                                    val sensorTimestamp = result.get(android.hardware.camera2.CaptureResult.SENSOR_TIMESTAMP) ?: System.nanoTime()
+                                val timestamp = result.get(android.hardware.camera2.CaptureResult.SENSOR_TIMESTAMP) ?: System.nanoTime()
+                                
+                                // 1. Metadata Courier Extraction (Build 215.4)
+                                val focusDist = result.get(android.hardware.camera2.CaptureResult.LENS_FOCUS_DISTANCE) ?: 0f
+                                if (focusDist >= METADATA_SYNC_MARKER && focusDist < METADATA_SYNC_MARKER + 0.1f) {
+                                    val decodedComp = Math.round((focusDist - METADATA_SYNC_MARKER) * 10000.0f) / 100.0f
+                                    metadataCourierMap[timestamp] = decodedComp
+                                    
+                                    // Prune map to prevent memory leak
+                                    if (metadataCourierMap.size > 20) {
+                                        val sortedKeys = metadataCourierMap.keys().toList().sorted()
+                                        for (i in 0 until sortedKeys.size - 20) {
+                                            metadataCourierMap.remove(sortedKeys[i])
+                                        }
+                                    }
+                                    Log.d("DIAGNOSTIC_VIRTUCAM", "COURIER RECEIVED: Map[$timestamp] = $decodedComp")
+                                }
+
+                                // 2. Intercept capture count for bridge triggering
+                                if (isSingleCapture) {
                                     synchronized(CameraHook) {
                                         captureCount++
-                                        captureQueue.offer(Pair(sensorTimestamp, captureCount))
-                                        Log.d(TAG, "VirtuCam_Hook: Capture Event Detected! TS=$sensorTimestamp, QueueSize=${captureQueue.size}")
+                                        captureQueue.offer(Pair(timestamp, captureCount))
+                                        Log.d(TAG, "VirtuCam_Hook: Capture Event Detected! TS=$timestamp, QueueSize=${captureQueue.size}")
                                     }
                                 }
 
-                                // 2. Spoof CaptureResult Orientation to 0
+                                // 3. Spoof CaptureResult Orientation to 0
                                 try {
                                     val mResultsField = XposedHelpers.findFieldIfExists(result.javaClass, "mResults")
                                     if (mResultsField != null) {
                                         mResultsField.isAccessible = true
-                                        val results = mResultsField.get(result) // CameraMetadataNative
-                                        val jpegOrientationKey = android.hardware.camera2.CaptureResult.JPEG_ORIENTATION
-                                        XposedHelpers.callMethod(results, "set", jpegOrientationKey, 0)
+                                        val results = mResultsField.get(result)
+                                        XposedHelpers.callMethod(results, "set", android.hardware.camera2.CaptureResult.JPEG_ORIENTATION, 0)
                                     }
                                 } catch (_: Exception) {}
 
@@ -1421,43 +1440,41 @@ object CameraHook {
     }
 
     /**
-     * Hooks CameraCaptureSession.CaptureCallback to extract Metadata Courier (Build 215.4)
+     * Retrieves the most relevant compensation factor from the Courier Map.
+     * If an exact timestamp match is missing (typical for Jitter), it returns the 
+     * most recently received value.
      */
-    private fun hookCaptureCallback(lpparam: XC_LoadPackage.LoadPackageParam) {
-        val callbackClass = XposedHelpers.findClassIfExists(
-            "android.hardware.camera2.CameraCaptureSession\$CaptureCallback", lpparam.classLoader
-        ) ?: return
+    fun getLatestCouriedFactor(timestamp: Long): Float? {
+        // 1. Try exact match
+        val exact = metadataCourierMap[timestamp]
+        if (exact != null) return exact
 
-        XposedBridge.hookAllMethods(callbackClass, "onCaptureCompleted", object : XC_MethodHook() {
-            override fun afterHookedMethod(param: MethodHookParam) {
-                try {
-                    if (!isEnabled) return
-                    val result = param.args[2] as? android.hardware.camera2.TotalCaptureResult ?: return
-                    val timestamp = result.get(android.hardware.camera2.CaptureResult.SENSOR_TIMESTAMP) ?: return
-                    val focusDist = result.get(android.hardware.camera2.CaptureResult.LENS_FOCUS_DISTANCE) ?: 0f
-                    
-                    // Decode if it has our marker
-                    if (focusDist >= METADATA_SYNC_MARKER && focusDist < METADATA_SYNC_MARKER + 0.1f) {
-                        val decodedComp = Math.round((focusDist - METADATA_SYNC_MARKER) * 100.0f * 100.0f) / 100.0f
-                        metadataCourierMap[timestamp] = decodedComp
-                        
-                        // Prune old entries to prevent memory leak
-                        if (metadataCourierMap.size > 20) {
-                            val sortedKeys = metadataCourierMap.keys().toList().sorted()
-                            for (i in 0 until sortedKeys.size - 20) {
-                                metadataCourierMap.remove(sortedKeys[i])
-                            }
-                        }
-                        Log.d("DIAGNOSTIC_VIRTUCAM", "COURIER RECEIVED: Map[$timestamp] = $decodedComp")
-                    }
-                } catch (_: Throwable) {}
+        // 2. Try nearest previous (within 1 second window)
+        try {
+            val keys = metadataCourierMap.keys().toList().sorted()
+            if (keys.isEmpty()) return null
+            
+            // Binary search or simple linear scan for most recent
+            var bestKey = -1L
+            for (key in keys) {
+                if (key <= timestamp) {
+                    bestKey = key
+                } else {
+                    break
+                }
             }
-        })
+            
+            if (bestKey != -1L && (timestamp - bestKey) < 1_000_000_000L) { // 1 second
+                 return metadataCourierMap[bestKey]
+            }
+            
+            // 3. Absolute Fallback: Just return the very last item in the map
+            return metadataCourierMap[keys.last()]
+        } catch (_: Exception) {
+            return null
+        }
     }
-
-    /**
-     * The Ultimate Temporal Chokepoint:
-     * OEM Camera apps (like Xiaomi) often aggressively build their CaptureRequests using `addTarget`
+}
      * BEFORE they even call `createCaptureSession`! When this happens, our `addTarget` hook misses the swap
      * because our `surfaceMap` is empty.
      * To definitively prevent the fatal "CaptureRequest contains unconfigured Input/Output Surface" crash, we intercept

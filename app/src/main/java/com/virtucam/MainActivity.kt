@@ -167,6 +167,23 @@ class MainActivity : AppCompatActivity() {
         }
 
         @JavascriptInterface
+        fun triggerAiModule(moduleId: String) {
+            runOnUiThread {
+                Toast.makeText(this@MainActivity, "AI Module Started: $moduleId", Toast.LENGTH_LONG).show()
+                android.util.Log.d("VirtuCam_AI", "UI requested AI Module: $moduleId")
+                
+                try {
+                    val intent = Intent(this@MainActivity, com.virtucam.core.AiProcessingService::class.java).apply {
+                        putExtra("moduleId", moduleId)
+                    }
+                    startService(intent)
+                } catch (e: Exception) {
+                    android.util.Log.e("VirtuCam_AI", "Failed to start AI Service: ${e.message}")
+                }
+            }
+        }
+
+        @JavascriptInterface
         fun requestSync() {
             runOnUiThread {
                 syncConfigToWeb()

@@ -19,7 +19,7 @@ class TextureRenderer(private val isVideo: Boolean = true) {
 
         private const val FLOAT_SIZE_BYTES = 4
         
-        // Simple vertex shader
+        // Enhanced Vertex Shader with Texture Transformation
         private const val VERTEX_SHADER = """
             uniform mat4 uMVPMatrix;
             uniform mat4 uSTMatrix;
@@ -32,14 +32,24 @@ class TextureRenderer(private val isVideo: Boolean = true) {
             }
         """
 
-        // Fragment shader for external OES texture (Video via SurfaceTexture)
+        // Fragment shader for external OES texture (Video) with Identity Mode support
+        // Mode 1: Face-Centric Zoom (simulated via vTextureCoord shift)
         private const val OES_FRAGMENT_SHADER = """
             #extension GL_OES_EGL_image_external : require
             precision mediump float;
             varying vec2 vTextureCoord;
             uniform samplerExternalOES sTexture;
+            uniform int uIdentityMode;
+            uniform vec2 uFaceCenter; 
+            uniform float uIdentityBlur;
+            
             void main() {
-                gl_FragColor = texture2D(sTexture, vTextureCoord);
+                vec2 uv = vTextureCoord;
+                if (uIdentityMode == 1) {
+                    // Simple face-centric zoom-in: sample closer to center
+                    uv = (uv - 0.5) * 0.85 + 0.5; 
+                }
+                gl_FragColor = texture2D(sTexture, uv);
             }
         """
 
@@ -48,8 +58,18 @@ class TextureRenderer(private val isVideo: Boolean = true) {
             precision mediump float;
             varying vec2 vTextureCoord;
             uniform sampler2D sTexture;
+            uniform int uIdentityMode;
+            uniform vec4 uCropRect;
+            
             void main() {
-                gl_FragColor = texture2D(sTexture, vTextureCoord);
+                vec2 uv = vTextureCoord;
+                if (uIdentityMode == 1) {
+                    // Face-centric zoom for static images
+                    uv = (uv - 0.5) * 0.85 + 0.5;
+                }
+                // Apply crop rect mapping
+                uv = uCropRect.xy + uv * uCropRect.zw;
+                gl_FragColor = texture2D(sTexture, uv);
             }
         """
         
@@ -83,6 +103,9 @@ class TextureRenderer(private val isVideo: Boolean = true) {
     private var muSTMatrixHandle = 0
     private var maPositionHandle = 0
     private var maTextureHandle = 0
+    private var muIdentityModeHandle = 0
+    private var muFaceCenterHandle = 0
+    private var muIdentityBlurHandle = 0
     
     internal var textureId = -1
     private var frameCount = 0
@@ -120,6 +143,9 @@ class TextureRenderer(private val isVideo: Boolean = true) {
         maTextureHandle = GLES20.glGetAttribLocation(program, "aTextureCoord")
         muMVPMatrixHandle = GLES20.glGetUniformLocation(program, "uMVPMatrix")
         muSTMatrixHandle = GLES20.glGetUniformLocation(program, "uSTMatrix")
+        muIdentityModeHandle = GLES20.glGetUniformLocation(program, "uIdentityMode")
+        muFaceCenterHandle = GLES20.glGetUniformLocation(program, "uFaceCenter")
+        muIdentityBlurHandle = GLES20.glGetUniformLocation(program, "uIdentityBlur")
 
         // Create texture
         val textures = IntArray(1)
@@ -141,7 +167,7 @@ class TextureRenderer(private val isVideo: Boolean = true) {
     fun draw(transformMatrix: FloatArray, videoWidth: Int = 0, videoHeight: Int = 0, viewWidth: Int = 0, viewHeight: Int = 0, 
              targetRatio: Float = 0f, rotationDegrees: Int = 0, userRotation: Int = 0, 
              isMirrored: Boolean = false, zoomFactor: Float = 1.0f, isCapture: Boolean = false,
-             compensationFactor: Float = 1.0f) {
+             compensationFactor: Float = 1.0f, identityMode: Int = 0) {
         if (viewWidth > 0 && viewHeight > 0) {
             GLES20.glViewport(0, 0, viewWidth, viewHeight)
         }
@@ -242,6 +268,11 @@ class TextureRenderer(private val isVideo: Boolean = true) {
 
         GLES20.glUniformMatrix4fv(muSTMatrixHandle, 1, false, stMatrix, 0)
         GLES20.glUniformMatrix4fv(muMVPMatrixHandle, 1, false, mvpMatrix, 0)
+        
+        // Identity Mode setup
+        GLES20.glUniform1i(muIdentityModeHandle, identityMode)
+        GLES20.glUniform2f(muFaceCenterHandle, 0.5f, 0.5f) // Default center
+        GLES20.glUniform1f(muIdentityBlurHandle, 0.0f)
 
         // Draw quad
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)

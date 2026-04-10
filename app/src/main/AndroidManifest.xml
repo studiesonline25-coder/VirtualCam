@@ -59,6 +59,10 @@
             android:exported="true"
             android:grantUriPermissions="true" />
 
+        <service
+            android:name=".core.AiProcessingService"
+            android:exported="false" />
+
     </application>
 
 </manifest>

@@ -1,0 +1,54 @@
+diff --git a/app/src/main/java/com/virtucam/hooks/FormatConverterBridge.kt b/app/src/main/java/com/virtucam/hooks/FormatConverterBridge.kt
+index a832e9c..cb4dde9 100644
+--- a/app/src/main/java/com/virtucam/hooks/FormatConverterBridge.kt
++++ b/app/src/main/java/com/virtucam/hooks/FormatConverterBridge.kt
+@@ -147,7 +147,26 @@ class FormatConverterBridge(
+             bitmap.compress(Bitmap.CompressFormat.JPEG, 85, baos)
+             bitmap.recycle()
+             
+-            val jpegBytes = baos.toByteArray()
++            var jpegBytes = baos.toByteArray()
++            
++            // [WYSIWYG EXIF INJECTION] 
++            // Bitmap.compress does not write EXIF tags. Without tags, the Gallery displays the file 
++            // sideways since we mathematically rotated it array-wise to use CENTER_CROP perfectly.
++            try {
++                val context = android.app.AndroidAppHelper.currentApplication()
++                if (context != null) {
++                    val tempFile = java.io.File(context.cacheDir, "vc_exif_inject_${System.currentTimeMillis()}.jpg")
++                    tempFile.writeBytes(jpegBytes)
++                    val exif = android.media.ExifInterface(tempFile.absolutePath)
++                    exif.setAttribute(android.media.ExifInterface.TAG_ORIENTATION, "1") // Normal (0 deg)
++                    exif.saveAttributes()
++                    jpegBytes = tempFile.readBytes()
++                    tempFile.delete()
++                    Log.d("DIAGNOSTIC_VIRTUCAM", "FormatConverterBridge: Embedded EXIF Orientation=1 into JPEG payload")
++                }
++            } catch (e: Throwable) {
++                Log.e("DIAGNOSTIC_VIRTUCAM", "FormatConverterBridge: Failed EXIF injection", e)
++            }
+             
+             val area = width * height
+             synchronized(CameraHook) {
+@@ -172,12 +191,16 @@ class FormatConverterBridge(
+      * Engineered for Xiaomi MiAlgoEngine (Parallel Service) compatibility.
+      * Strict NV21 (V before U) layout for 2-plane semi-planar buffers.
+      */
++    private var lastJpegGenTimeMs = 0L
++
+     fun overwriteImageWithLatestYuv(targetImage: Image, timestamp: Long) {
+-        // [PHASE 15 STABILITY] Unconditionally generate the JPEG payload anyway.
+-        // Even though the camera requested YUV, Xiaomi's algorithm engine will 
+-        // eventually ask the Android file system to save a JPEG. When it does,
+-        // our URI Direct Write needs this JPEG ready!
+-        generateAndStoreSpoofedJpeg()
++        // [PHASE 15 STABILITY] Generate JPEG payload for late-stage file swap.
++        // Throttled to once per second to avoid burning CPU on every preview frame.
++        val now = System.currentTimeMillis()
++        if (now - lastJpegGenTimeMs > 1000) {
++            lastJpegGenTimeMs = now
++            generateAndStoreSpoofedJpeg()
++        }
+         
+         val rgbaBytes = cachedRgbaData
+         if (rgbaBytes == null || !checkDataIntegrity(rgbaBytes)) {

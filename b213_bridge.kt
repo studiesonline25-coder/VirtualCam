@@ -131,62 +131,40 @@ class FormatConverterBridge(
      * Required for URI Direct Write bypass because native camera often uses YUV buffers 
      * but writes JPEGs to the sandboxed disk later.
      */
-    private fun generateAndStoreSpoofedJpeg() {
+    private fun generateAndStoreSpoofedJpeg(): ByteArray? {
         val rgbaBytes = cachedRgbaData
-        if (rgbaBytes == null || !checkDataIntegrity(rgbaBytes)) return
+        if (rgbaBytes == null || !checkDataIntegrity(rgbaBytes)) return null
         
-        // [SHUTTER OPTIMIZATION] Throttle: only one bridge processes JPEG at a time
-        if (CameraHook.isGeneratingJpeg) return
+        val expectedSize = width * height * 4
+        if (rgbaBytes.size < expectedSize) return null
         
-        val w = width
-        val h = height
-        
-        Thread {
-            try {
-                CameraHook.isGeneratingJpeg = true
-                Log.d(TAG, "FormatConverterBridge: Async JPEG start for ${w}x${h}")
-                
-                val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-                val rgbaBuffer = ByteBuffer.wrap(rgbaBytes)
-                bitmap.copyPixelsFromBuffer(rgbaBuffer)
-                
-                val baos = ByteArrayOutputStream()
-                bitmap.compress(Bitmap.CompressFormat.JPEG, 85, baos)
-                bitmap.recycle()
-                
-                var jpegBytes = baos.toByteArray()
-                
-                // EXIF INJECTION
-                try {
-                    val context = android.app.AndroidAppHelper.currentApplication()
-                    if (context != null) {
-                        val tempFile = java.io.File(context.cacheDir, "vc_exif_inject_${System.currentTimeMillis()}.jpg")
-                        tempFile.writeBytes(jpegBytes)
-                        val exif = android.media.ExifInterface(tempFile.absolutePath)
-                        exif.setAttribute(android.media.ExifInterface.TAG_ORIENTATION, "1")
-                        exif.saveAttributes()
-                        jpegBytes = tempFile.readBytes()
-                        tempFile.delete()
-                    }
-                } catch (e: Throwable) {
-                    Log.e(TAG, "Exif inject fail", e)
+        try {
+            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            val rgbaBuffer = ByteBuffer.wrap(rgbaBytes)
+            bitmap.copyPixelsFromBuffer(rgbaBuffer)
+            
+            val baos = ByteArrayOutputStream()
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 85, baos)
+            bitmap.recycle()
+            
+            val jpegBytes = baos.toByteArray()
+            
+            val area = width * height
+            synchronized(CameraHook) {
+                if (area >= CameraHook.latestVirtualJpegArea) {
+                    CameraHook.latestVirtualJpeg = jpegBytes
+                    CameraHook.latestVirtualJpegArea = area
+                    Log.d(TAG, "FormatConverterBridge: Stored Virtual JPEG (${jpegBytes.size} bytes) for late-stage interception (Area: $area)")
+                } else {
+                    Log.d(TAG, "FormatConverterBridge: Discarding ${width}x${height} JPEG, a larger capture already won the race.")
                 }
-                
-                val area = w * h
-                synchronized(CameraHook) {
-                    if (area >= CameraHook.latestVirtualJpegArea) {
-                        CameraHook.latestVirtualJpeg = jpegBytes
-                        CameraHook.latestVirtualJpegArea = area
-                        Log.d(TAG, "FormatConverterBridge: Stored Virtual JPEG (${jpegBytes.size} bytes) (Area: $area)")
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Async JPEG generation failed", e)
-            } finally {
-                CameraHook.isGeneratingJpeg = false
-                Log.d(TAG, "FormatConverterBridge: Async JPEG done.")
             }
-        }.start()
+            
+            return jpegBytes
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to generate spoofed JPEG", e)
+            return null
+        }
     }
 
     /**
@@ -194,16 +172,12 @@ class FormatConverterBridge(
      * Engineered for Xiaomi MiAlgoEngine (Parallel Service) compatibility.
      * Strict NV21 (V before U) layout for 2-plane semi-planar buffers.
      */
-    private var lastJpegGenTimeMs = 0L
-
     fun overwriteImageWithLatestYuv(targetImage: Image, timestamp: Long) {
-        // [PHASE 15 STABILITY] Generate JPEG payload for late-stage file swap.
-        // Throttled to once per second to avoid burning CPU on every preview frame.
-        val now = System.currentTimeMillis()
-        if (now - lastJpegGenTimeMs > 1000) {
-            lastJpegGenTimeMs = now
-            generateAndStoreSpoofedJpeg()
-        }
+        // [PHASE 15 STABILITY] Unconditionally generate the JPEG payload anyway.
+        // Even though the camera requested YUV, Xiaomi's algorithm engine will 
+        // eventually ask the Android file system to save a JPEG. When it does,
+        // our URI Direct Write needs this JPEG ready!
+        generateAndStoreSpoofedJpeg()
         
         val rgbaBytes = cachedRgbaData
         if (rgbaBytes == null || !checkDataIntegrity(rgbaBytes)) {
@@ -231,63 +205,34 @@ class FormatConverterBridge(
             val srcW = width.toFloat()
             val srcH = height.toFloat()
         
-            val context = android.app.AndroidAppHelper.currentApplication()
-            var zoom = CameraHook.zoomFactor
-            var comp = CameraHook.compensationFactor
-            var userRot = CameraHook.rotation
-            
-            // [Multi-Process Sync] MiAlgoEngine often runs in a background process.
-            // Force reload from disk to stay in sync with UI sliders.
-            // [Multi-Process Sync] MiAlgoEngine often runs in a background process (e.g. mialgo_service).
-            // Bypass Android's stale SharedPreferences cache by manually reading the XML from absolute paths on disk.
-            try {
-                val config = com.virtucam.data.VirtuCamConfig.getInstance(context ?: android.app.AndroidAppHelper.currentApplication()!!)
-                
-                // Perform a raw file read (Direct Sync) with absolute path fallbacks
-                zoom = config.getFloatDirectSync(context, "zoom_factor", 1.0f)
-                comp = config.getFloatDirectSync(context, "compensation_factor", 1.0f)
-                userRot = config.rotation
-                
-                // --- METADATA COURIER SYNC (Build 215.4 / 216) ---
-                // We use the 'Courier' to sync the compensation factor (Stretch) in real-time.
-                // This bypasses stale SharedPreferences in background processes like mialgo_service.
-                val couriedComp = CameraHook.getLatestCouriedFactor(timestamp)
-                if (couriedComp != null) {
-                    comp = couriedComp
-                    Log.d(TAG, "DIAGNOSTIC_VIRTUCAM: GLOBAL SYNC SUCCESS via Courier. Comp=$comp (TS $timestamp)")
-                } else {
-                    Log.d(TAG, "DIAGNOSTIC_VIRTUCAM: GLOBAL SYNC CHECK (File Fallback). Comp=$comp, Zoom=$zoom, Rot=$userRot")
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "DIAGNOSTIC_VIRTUCAM: Failed to reload config in MiAlgo: ${e.message}")
-            }
+        // DYNAMIC LOGIC: If target is Landscape but source is Portrait (or vice versa), 
+        // we likely need a 90/270 rotation regardless of sensorOrientation.
+        val targetIsLandscape = w > h
+        val sourceIsLandscape = width > height
+        
+        var baseRotation = sensorOrientation
+        if (targetIsLandscape != sourceIsLandscape) {
+            // Force a 90-degree compensation if orientations mismatch
+            // This fixes the "sideways in browser" issue identified in your audio!
+            baseRotation = (baseRotation + 90) % 360
+        }
 
-            // --- UNIFIED ROTATION SYNC ---
-            // Force bridge to match the confirmed upright rotation from Build 214.5.
-            val appRotation = CameraHook.lastRequestedOrientation.let { if (it == -1) 0 else it }
-            val totalRotation = (sensorOrientation + userRot + rotationOffset + appRotation) % 360
+        // --- METADATA SYNC ---
+        // If the app explicitly requested a rotation (via CaptureRequest tags like JPEG_ORIENTATION),
+        // we incorporate it to follow the app's own internal logic.
+        val appRotation = CameraHook.lastRequestedOrientation.let { if (it == -1) 0 else it }
+        val totalRotation = (baseRotation + rotationOffset + appRotation) % 360
+
 
             val tgtW = w.toFloat()
             val tgtH = h.toFloat()
 
-            // Calculate base source dimensions
-            val baseSrcW = if (totalRotation % 180 == 0) width.toFloat() else height.toFloat()
-            val baseSrcH = if (totalRotation % 180 == 0) height.toFloat() else width.toFloat()
+            // Calculate effective source dimensions after sensor rotation
+            // If rotating 90/270, source's logic width/height are swapped
+            val logicSrcW = if (totalRotation % 180 == 0) width.toFloat() else height.toFloat()
+            val logicSrcH = if (totalRotation % 180 == 0) height.toFloat() else width.toFloat()
             
-            Log.d(TAG, "DIAGNOSTIC_VIRTUCAM: Intercepting YUV Capture. Target=${w}x${h}, Bridge=${width}x${height}, SensorRot=$sensorOrientation, Zoom=$zoom, Comp=$comp, Rot=$totalRotation")
-
-            // Apply Compensation (Stretch) to the logic width to squash width vs height
-            // Multiplier < 1.0 (e.g. 0.59) makes content 'wider' (Stretches contents horizontally).
-            // Multiplier > 1.0 makes content 'thinner'.
-            val logicSrcW = baseSrcW * comp
-            val logicSrcH = baseSrcH
-            
-            // --- FIT_CENTER STRATEGY ---
-            // Use Math.min (Fit-Center) to fill as much as possible without cropping margins.
-            // This ensures that the 16:9 preview content is visible within the 4:3 capture box.
-            val baseScale = Math.min(tgtW / logicSrcW, tgtH / logicSrcH)
-            val scale = baseScale * zoom
-            
+            val scale = Math.max(tgtW / logicSrcW, tgtH / logicSrcH)
             val offsetX = (logicSrcW - tgtW / scale) / 2f
             val offsetY = (logicSrcH - tgtH / scale) / 2f
 
@@ -353,9 +298,8 @@ class FormatConverterBridge(
                     for (tx in 0 until tW_out) {
                         // a) Map target(tx, ty) back to logic source coordinate system
                         // Multiply by 2 because this is Chroma (half res)
-                        // [PRECISION FIX] Float-to-Int conversion centering
-                        val lx = ((tx * 2) / scale + offsetX).coerceIn(0f, logicSrcW - 1)
-                        val ly = ((ty * 2) / scale + offsetY).coerceIn(0f, logicSrcH - 1)
+                        val lx = (tx * 2) / scale + offsetX
+                        val ly = (ty * 2) / scale + offsetY
 
                         // b) Apply rotation to get physical source coordinates (RGBA cache)
                         var sx = 0f
@@ -481,14 +425,9 @@ class FormatConverterBridge(
             
             val tW = targetImage.width
             val tH = targetImage.height
-            
-            // Trigger background JPEG generation (doesn't block)
-            generateAndStoreSpoofedJpeg()
-            
-            // Use the latest one that finished (might be from 1s ago, but better than nothing)
-            val jpegBytes = CameraHook.latestVirtualJpeg
+            val jpegBytes = generateAndStoreSpoofedJpeg()
             if (jpegBytes == null) {
-                Log.e(TAG, "DIAGNOSTIC_VIRTUCAM: Failed to get latest Virtual JPEG. Not generated yet.")
+                Log.e(TAG, "DIAGNOSTIC_VIRTUCAM: Failed to generate Virtual JPEG.")
                 return
             }
             
