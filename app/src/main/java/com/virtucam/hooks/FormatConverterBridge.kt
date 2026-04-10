@@ -248,7 +248,17 @@ class FormatConverterBridge(
                 comp = config.getFloatDirectSync(context, "compensation_factor", 1.0f)
                 userRot = config.rotation
                 
-                Log.d(TAG, "DIAGNOSTIC_VIRTUCAM: GLOBAL SYNC CHECK. Comp=$comp, Zoom=$zoom, Rot=$userRot")
+                // --- METADATA COURIER SYNC (Build 215.4) ---
+                // If a value exists in the Courier Map for this specific timestamp, 
+                // it means the UI process passed the value through the OS-level CaptureRequest.
+                // This is the most reliable way to sync across ClassLoaders/Processes.
+                val couriedComp = CameraHook.metadataCourierMap[timestamp]
+                if (couriedComp != null) {
+                    comp = couriedComp
+                    Log.d(TAG, "DIAGNOSTIC_VIRTUCAM: GLOBAL SYNC SUCCESS via Courier. Comp=$comp (Timestamp: $timestamp)")
+                } else {
+                    Log.d(TAG, "DIAGNOSTIC_VIRTUCAM: GLOBAL SYNC CHECK (File Fallback). Comp=$comp, Zoom=$zoom, Rot=$userRot")
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "DIAGNOSTIC_VIRTUCAM: Failed to reload config in MiAlgo: ${e.message}")
             }

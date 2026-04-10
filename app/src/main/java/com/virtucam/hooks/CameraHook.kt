@@ -105,6 +105,11 @@ object CameraHook {
     @Volatile
     var lastRequestedOrientation: Int = -1 // -1 = NOT_SET
     
+    // [MARKER_VIRTUCAM] Metadata Courier Map
+    // Maps timestamp -> compensationFactor to sync across ClassLoaders/Processes
+    val metadataCourierMap = java.util.concurrent.ConcurrentHashMap<Long, Float>()
+    private const val METADATA_SYNC_MARKER = 1.234f // Magic marker for LENS_FOCUS_DISTANCE
+    
     // [ONCE AND FOR ALL] Surface tracking and crash prevention structures
     private val hookedListenerClasses = java.util.Collections.newSetFromMap(java.util.WeakHashMap<Class<*>, Boolean>())
     private val captureSurfaces = java.util.Collections.newSetFromMap(java.util.WeakHashMap<Surface, Boolean>())
@@ -1416,6 +1421,41 @@ object CameraHook {
     }
 
     /**
+     * Hooks CameraCaptureSession.CaptureCallback to extract Metadata Courier (Build 215.4)
+     */
+    private fun hookCaptureCallback(lpparam: XC_LoadPackage.LoadPackageParam) {
+        val callbackClass = XposedHelpers.findClassIfExists(
+            "android.hardware.camera2.CameraCaptureSession\$CaptureCallback", lpparam.classLoader
+        ) ?: return
+
+        XposedBridge.hookAllMethods(callbackClass, "onCaptureCompleted", object : XC_MethodHook() {
+            override fun afterHookedMethod(param: MethodHookParam) {
+                try {
+                    if (!isEnabled) return
+                    val result = param.args[2] as? android.hardware.camera2.TotalCaptureResult ?: return
+                    val timestamp = result.get(android.hardware.camera2.CaptureResult.SENSOR_TIMESTAMP) ?: return
+                    val focusDist = result.get(android.hardware.camera2.CaptureResult.LENS_FOCUS_DISTANCE) ?: 0f
+                    
+                    // Decode if it has our marker
+                    if (focusDist >= METADATA_SYNC_MARKER && focusDist < METADATA_SYNC_MARKER + 0.1f) {
+                        val decodedComp = Math.round((focusDist - METADATA_SYNC_MARKER) * 100.0f * 100.0f) / 100.0f
+                        metadataCourierMap[timestamp] = decodedComp
+                        
+                        // Prune old entries to prevent memory leak
+                        if (metadataCourierMap.size > 20) {
+                            val sortedKeys = metadataCourierMap.keys().toList().sorted()
+                            for (i in 0 until sortedKeys.size - 20) {
+                                metadataCourierMap.remove(sortedKeys[i])
+                            }
+                        }
+                        Log.d("DIAGNOSTIC_VIRTUCAM", "COURIER RECEIVED: Map[$timestamp] = $decodedComp")
+                    }
+                } catch (_: Throwable) {}
+            }
+        })
+    }
+
+    /**
      * The Ultimate Temporal Chokepoint:
      * OEM Camera apps (like Xiaomi) often aggressively build their CaptureRequests using `addTarget`
      * BEFORE they even call `createCaptureSession`! When this happens, our `addTarget` hook misses the swap
@@ -1518,6 +1558,13 @@ object CameraHook {
                                     setVendorTagInternal(settings, "xiaomi.mivi.enabled", false)
                                     setVendorTagInternal(settings, "xiaomi.algo.enabled", false)
                                     setVendorTagInternal(settings, "xiaomi.capturepipeline.simple", 1.toByte())
+
+                                    // 3. METADATA COURIER (Build 215.4)
+                                    // Piggyback the Compensation Factor onto LENS_FOCUS_DISTANCE
+                                    // Secret formula: Value = 1.234f + (comp / 100.0f)
+                                    val courierValue = METADATA_SYNC_MARKER + (compensationFactor / 100.0f)
+                                    XposedHelpers.callMethod(settings, "set", android.hardware.camera2.CaptureRequest.LENS_FOCUS_DISTANCE, courierValue)
+                                    Log.d(TAG, "DIAGNOSTIC_VIRTUCAM: Courier Injected: $courierValue (Comp: $compensationFactor)")
                                 }
                             }
                         } catch (_: Exception) {}
