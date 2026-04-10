@@ -248,13 +248,15 @@ class FormatConverterBridge(
                 comp = config.getFloatDirectSync(context, "compensation_factor", 1.0f)
                 userRot = config.rotation
                 
-                // --- METADATA COURIER SYNC (Build 215.4 / 216) ---
-                // We use the 'Courier' to sync the compensation factor (Stretch) in real-time.
+                // --- METADATA COURIER SYNC (Build 216.3: Ultimate Courier) ---
+                // We use the 'Courier' to sync all transformation parameters in real-time.
                 // This bypasses stale SharedPreferences in background processes like mialgo_service.
-                val couriedComp = CameraHook.getLatestCouriedFactor(timestamp)
-                if (couriedComp != null) {
-                    comp = couriedComp
-                    Log.d(TAG, "DIAGNOSTIC_VIRTUCAM: GLOBAL SYNC SUCCESS via Courier. Comp=$comp (TS $timestamp)")
+                val couriedState = CameraHook.getLatestCouriedState(timestamp)
+                if (couriedState != null) {
+                    comp = couriedState.compensationFactor
+                    userRot = couriedState.rotation
+                    // Mirroring is typically handled by the UI, but we can sync it here if needed
+                    Log.d(TAG, "DIAGNOSTIC_VIRTUCAM: GLOBAL SYNC SUCCESS via Courier. Comp=$comp, Rot=$userRot (TS $timestamp)")
                 } else {
                     Log.d(TAG, "DIAGNOSTIC_VIRTUCAM: GLOBAL SYNC CHECK (File Fallback). Comp=$comp, Zoom=$zoom, Rot=$userRot")
                 }

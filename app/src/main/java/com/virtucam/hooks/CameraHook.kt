@@ -105,9 +105,15 @@ object CameraHook {
     @Volatile
     var lastRequestedOrientation: Int = -1 // -1 = NOT_SET
     
-    // [MARKER_VIRTUCAM] Metadata Courier Map
-    // Maps timestamp -> compensationFactor to sync across ClassLoaders/Processes
-    val metadataCourierMap = java.util.concurrent.ConcurrentHashMap<Long, Float>()
+    // [MARKER_VIRTUCAM] Metadata Courier State
+    data class TransformationState(
+        val compensationFactor: Float,
+        val rotation: Int,
+        val isMirrored: Boolean
+    )
+    
+    // Maps timestamp -> TransformationState to sync across ClassLoaders/Processes
+    val metadataCourierMap = java.util.concurrent.ConcurrentHashMap<Long, TransformationState>()
     private const val METADATA_SYNC_MARKER = 1.234f // Magic marker for LENS_FOCUS_DISTANCE
     
     // [ONCE AND FOR ALL] Surface tracking and crash prevention structures
@@ -1026,11 +1032,24 @@ object CameraHook {
                             try {
                                 val timestamp = result.get(android.hardware.camera2.CaptureResult.SENSOR_TIMESTAMP) ?: System.nanoTime()
                                 
-                                // 1. Metadata Courier Extraction (Build 215.4)
+                                // 1. Metadata Courier Extraction (Build 216.3: Ultimate Courier)
                                 val focusDist = result.get(android.hardware.camera2.CaptureResult.LENS_FOCUS_DISTANCE) ?: 0f
-                                if (focusDist >= METADATA_SYNC_MARKER && focusDist < METADATA_SYNC_MARKER + 0.1f) {
-                                    val decodedComp = Math.round((focusDist - METADATA_SYNC_MARKER) * 10000.0f) / 100.0f
-                                    metadataCourierMap[timestamp] = decodedComp
+                                if (focusDist >= METADATA_SYNC_MARKER && focusDist < METADATA_SYNC_MARKER + 1.0f) {
+                                    val residual = focusDist - METADATA_SYNC_MARKER
+                                    
+                                    val decodedRot = (Math.round(residual * 10.0f) * 10).coerceIn(0, 270)
+                                    val residualForComp = residual - (decodedRot / 1000.0f)
+                                    
+                                    val decodedComp = Math.round(residualForComp * 10000.0f) / 100.0f
+                                    val residualForMirror = residualForComp - (decodedComp / 10000.0f)
+                                    
+                                    val decodedMirror = Math.round(residualForMirror * 100000.0f) >= 1
+                                    
+                                    metadataCourierMap[timestamp] = TransformationState(
+                                        compensationFactor = decodedComp,
+                                        rotation = decodedRot,
+                                        isMirrored = decodedMirror
+                                    )
                                     
                                     // Prune map to prevent memory leak
                                     if (metadataCourierMap.size > 20) {
@@ -1440,21 +1459,16 @@ object CameraHook {
     }
 
     /**
-     * Retrieves the most relevant compensation factor from the Courier Map.
-     * If an exact timestamp match is missing (typical for Jitter), it returns the 
-     * most recently received value.
+     * Retrieves the most relevant transformation state from the Courier Map.
      */
-    fun getLatestCouriedFactor(timestamp: Long): Float? {
-        // 1. Try exact match
+    fun getLatestCouriedState(timestamp: Long): TransformationState? {
         val exact = metadataCourierMap[timestamp]
         if (exact != null) return exact
 
-        // 2. Try nearest previous (within 1 second window)
         try {
             val keys = metadataCourierMap.keys().toList().sorted()
             if (keys.isEmpty()) return null
             
-            // Binary search or simple linear scan for most recent
             var bestKey = -1L
             for (key in keys) {
                 if (key <= timestamp) {
@@ -1468,7 +1482,6 @@ object CameraHook {
                  return metadataCourierMap[bestKey]
             }
             
-            // 3. Absolute Fallback: Just return the very last item in the map
             return metadataCourierMap[keys.last()]
         } catch (_: Exception) {
             return null
@@ -1577,12 +1590,15 @@ object CameraHook {
                                     setVendorTagInternal(settings, "xiaomi.algo.enabled", false)
                                     setVendorTagInternal(settings, "xiaomi.capturepipeline.simple", 1.toByte())
 
-                                    // 3. METADATA COURIER (Build 215.4)
-                                    // Piggyback the Compensation Factor onto LENS_FOCUS_DISTANCE
-                                    // Secret formula: Value = 1.234f + (comp / 100.0f)
-                                    val courierValue = METADATA_SYNC_MARKER + (compensationFactor / 100.0f)
+                                    // 3. METADATA COURIER (Build 216.3: Ultimate Courier)
+                                    // Bit-pack: Marker + (Rot/1000) + (Comp/10000) + (Mirror/100000)
+                                    val rotationPart = (rotation / 1000.0f)
+                                    val compPart = (compensationFactor / 10000.0f)
+                                    val mirrorPart = if (isMirrored) 0.00001f else 0f
+                                    
+                                    val courierValue = METADATA_SYNC_MARKER + rotationPart + compPart + mirrorPart
                                     XposedHelpers.callMethod(settings, "set", android.hardware.camera2.CaptureRequest.LENS_FOCUS_DISTANCE, courierValue)
-                                    Log.d(TAG, "DIAGNOSTIC_VIRTUCAM: Courier Injected: $courierValue (Comp: $compensationFactor)")
+                                    Log.d(TAG, "DIAGNOSTIC_VIRTUCAM: Courier Injected: $courierValue (Comp: $compensationFactor, Rot: $rotation, Mirror: $isMirrored)")
                                 }
                             }
                         } catch (_: Exception) {}
