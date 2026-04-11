@@ -163,9 +163,9 @@ class FormatConverterBridge(
                         val tempFile = java.io.File(context.cacheDir, "vc_exif_inject_${System.currentTimeMillis()}.jpg")
                         tempFile.writeBytes(jpegBytes)
                         val exif = android.media.ExifInterface(tempFile.absolutePath)
-                        exif.setAttribute(android.media.ExifInterface.TAG_ORIENTATION, "1")
+                        exif.setAttribute(android.media.ExifInterface.TAG_ORIENTATION, "6")
                         exif.saveAttributes()
-                        Log.e("DIAGNOSTIC_VIRTUCAM", "FormatConverterBridge: BURNED TAG_ORIENTATION=1 (Upright) into JPEG EXIF")
+                        Log.e("DIAGNOSTIC_VIRTUCAM", "FormatConverterBridge: BURNED TAG_ORIENTATION=6 (90 CW) into JPEG EXIF")
                         jpegBytes = tempFile.readBytes()
                         tempFile.delete()
                     }
@@ -198,7 +198,7 @@ class FormatConverterBridge(
     private var lastJpegGenTimeMs = 0L
 
     fun overwriteImageWithLatestYuv(targetImage: Image, timestamp: Long) {
-        // [PHASE 15 STABILITY] Generate JPEG payload for late-stage file swap.
+        // [Fix] Generate JPEG payload for late-stage file swap.
         // Throttled to once per second to avoid burning CPU on every preview frame.
         val now = System.currentTimeMillis()
         if (now - lastJpegGenTimeMs > 1000) {

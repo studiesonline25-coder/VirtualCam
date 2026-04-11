@@ -460,11 +460,11 @@ object CameraHook {
                 if (attrName == "Orientation" || attrName == "android:Orientation") {
                     if (param.method.name == "getAttributeInt") {
                         val defaultValue = param.args[1] as? Int ?: 1
-                        param.result = 1 // [WYSIWYG Fix] Pixels are already upright, set Normal (0 deg)
+                        param.result = 6 // [Fix] Force Rotate 90 CW for Gallery
                     } else if (param.method.name == "getAttribute") {
-                        param.result = "1" // [WYSIWYG Fix] Pixels are already upright, set Normal (0 deg)
+                        param.result = "6" // [Fix] Force Rotate 90 CW for Gallery
                     }
-                    Log.v("DIAGNOSTIC_VIRTUCAM", "ExifInterface: Forced Orientation=1")
+                    Log.v("DIAGNOSTIC_VIRTUCAM", "ExifInterface: Forced Orientation=6")
                 }
             }
         }
@@ -507,8 +507,8 @@ object CameraHook {
                         val path = file.absolutePath
                         XposedHelpers.setAdditionalInstanceField(param.thisObject, "vcPath", path)
                         
-                        // [FIX] Skip our own EXIF injection temp files to prevent recursive corruption
-                        if (path.contains("vc_exif_inject")) return
+                        // [Fix] Skip our own EXIF injection temp files
+                        if (path.contains("vc_exif_inject", true)) return
                         
                         // Only intercept if it looks like a camera capture artifact
                         if (path.endsWith(".jpg", true) && (path.contains("dcim", true) || path.contains("camera", true) || path.contains("cache", true))) {
@@ -533,10 +533,12 @@ object CameraHook {
                         val data = param.args[0] as? ByteArray ?: return
                         val path = XposedHelpers.getAdditionalInstanceField(param.thisObject, "vcPath") as? String ?: ""
                         
-                        // [FIX] Skip our own EXIF injection temp files
-                        if (path.contains("vc_exif_inject")) return
-                        // [FIX] Intercepting all writes to ensure rotation parity
-                        // if (path.contains("thumb", true)) return
+                        // [Fix] Skip our own EXIF injection and thumbnail files
+                        if (path.contains("vc_exif_inject", true)) return
+                        if (path.contains("thumb", true)) {
+                            Log.v(TAG, "VirtuCam_Storage: Skipping thumbnail swap for $path")
+                            return
+                        }
                         
                         // Overwrite writes that likely represent the full image payload
                         // JPEG Magic Bytes: FF D8 FF
