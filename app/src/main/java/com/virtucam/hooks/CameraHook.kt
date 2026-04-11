@@ -2595,6 +2595,7 @@ class VirtualRenderThread(
                     if (!isEnabled) return
                     val key = param.args[0] as String
                     if (key == "rotation-degrees" || key == "rotation") {
+                        val original = param.args[1] as Int
                         param.args[1] = 0 // [WYSIWYG Fix] Enforced 0
                         Log.e(TAG, "DIAGNOSTIC_VIRTUCAM: MediaFormat Rotation SPOOFED $original -> 0")
                     }
