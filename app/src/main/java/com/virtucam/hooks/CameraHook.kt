@@ -1062,8 +1062,7 @@ object CameraHook {
                                             // Cleanup old entries (Keep last 2 seconds)
                                             if (metadataCourierMap.size > 120) {
                                                 val cutoff = sensorTimestamp - 2_000_000_000L
-                                                val it = metadataCourierMap.keys().iterator()
-                                                while (it.hasNext()) { if (it.next() < cutoff) it.remove() }
+                                                metadataCourierMap.keys.removeIf { it < cutoff }
                                             }
                                         }
 
