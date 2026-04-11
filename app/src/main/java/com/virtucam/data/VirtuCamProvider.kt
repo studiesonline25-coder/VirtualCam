@@ -62,12 +62,12 @@ class VirtuCamProvider : ContentProvider() {
                         if (config.isStream) 1 else 0,
                         config.streamUrl ?: "",
                         config.targetApps.joinToString(","),
-                        config.compensationFactor,
-                        if (config.isMirrored) 1 else 0,
-                        config.zoomFactor,
-                        if (config.rtspUseTcp) 1 else 0,
-                        config.rotation,
-                        if (config.isColorSwapped) 1 else 0
+                        config.getFloatDirectSync(context, "compensation_factor", 1.0f),
+                        if (config.getFloatDirectSync(context, "is_mirrored", 0.0f) == 1.0f) 1 else 0,
+                        config.getFloatDirectSync(context, "zoom_factor", 1.0f),
+                        if (config.getFloatDirectSync(context, "rtsp_use_tcp", 1.0f) == 1.0f) 1 else 0,
+                        config.getFloatDirectSync(context, "rotation_override", 0.0f).toInt(),
+                        if (config.getFloatDirectSync(context, "is_color_swapped", 0.0f) == 1.0f) 1 else 0
                     ))
                 }
             }

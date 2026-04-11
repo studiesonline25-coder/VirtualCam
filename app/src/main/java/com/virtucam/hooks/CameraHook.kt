@@ -1051,11 +1051,10 @@ object CameraHook {
                                             
                                             val decodedRot = (Math.round(remainder * 1000.0f) / 90 * 90).coerceIn(0, 270)
                                             val afterRot = remainder - (decodedRot / 1000.0f)
-                                            
-                                            val decodedComp = Math.round(afterRot * 10000.0f) / 100.0f // e.g. 1.30f
+                                            val decodedComp = Math.round(afterRot * 100.0f * 100.0f) / 100.0f
                                             val afterComp = afterRot - (decodedComp / 100.0f)
                                             
-                                            val decodedMirror = afterComp > 0.000005f
+                                            val decodedMirror = afterComp > 0.00005f
                                             
                                             metadataCourierMap[sensorTimestamp] = TransformationState(decodedComp, decodedRot, decodedMirror)
                                             
@@ -1535,19 +1534,17 @@ object CameraHook {
                                 val jpegOrientationKey = android.hardware.camera2.CaptureRequest.JPEG_ORIENTATION
                                 XposedHelpers.callMethod(settings, "set", jpegOrientationKey, 0)
                                 
-                                // 3. METADATA COURIER (Build 220: The 'Truth' Sync)
-                                // Bit-pack: Marker + (Rot/1000) + (Comp/10000) + (Mirror/100000)
+                                // 3. METADATA COURIER (Build 221: The 'Truth' Sync)
+                                // Bit-pack: Marker + (Rot/1000) + (Comp/100) + (Mirror/10000)
                                 val rotationPart = (rotation / 1000.0f)
-                                val compPart = (compensationFactor / 10000.0f)
-                                val mirrorPart = if (isMirrored) 0.00001f else 0f
+                                val compPart = (compensationFactor / 100.0f)
+                                val mirrorPart = if (isMirrored) 0.0001f else 0f
                                 
                                 val courierValue = METADATA_SYNC_MARKER + rotationPart + compPart + mirrorPart
                                 XposedHelpers.callMethod(settings, "set", android.hardware.camera2.CaptureRequest.LENS_FOCUS_DISTANCE, courierValue)
                                 
                                 // [TRUTH LOG] This confirms the Camera App process HAS the updated slider value.
-                                if (System.currentTimeMillis() % 1000 < 100) { // Throttle log to 10% frequency
-                                    Log.d(TAG, "DIAGNOSTIC_VIRTUCAM: Courier Injected: $courierValue (Stretch: $compensationFactor, Rot: $rotation, Mirror: $isMirrored)")
-                                }
+                                Log.d(TAG, "DIAGNOSTIC_VIRTUCAM: Courier Injected: $courierValue (Stretch: $compensationFactor, Rot: $rotation, Mirror: $isMirrored)")
                                 
                                 // 2. NUCLEAR SWEEP: Disable parallel capture and AI features in the metadata directly
                                 val manufacturer = android.os.Build.MANUFACTURER ?: ""

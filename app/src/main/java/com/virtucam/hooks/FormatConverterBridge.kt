@@ -257,26 +257,35 @@ class FormatConverterBridge(
             val tgtW = w.toFloat()
             val tgtH = h.toFloat()
 
-            // Calculate base source dimensions
+            // Calculate base source dimensions (Upright base)
             val baseSrcW = if (totalRotation % 180 == 0) width.toFloat() else height.toFloat()
             val baseSrcH = if (totalRotation % 180 == 0) height.toFloat() else width.toFloat()
-            
-            Log.d(TAG, "DIAGNOSTIC_VIRTUCAM: Intercepting YUV Capture. Target=${w}x${h}, Bridge=${width}x${height}, SensorRot=$sensorOrientation, Zoom=$zoom, Comp=$comp, Rot=$totalRotation")
 
-            // Apply Compensation (Stretch) to the logic width to squash width vs height
-            // Multiplier < 1.0 (e.g. 0.59) makes content 'wider' (Stretches contents horizontally).
-            // Multiplier > 1.0 makes content 'thinner'.
-            val logicSrcW = baseSrcW * comp
-            val logicSrcH = baseSrcH
+            // 1. Calculate oriented viewport/target (what the user 'sees' in the buffer)
+            val orientedTgtW = if (totalRotation % 180 != 0) tgtH else tgtW
+            val orientedTgtH = if (totalRotation % 180 != 0) tgtW else tgtH
             
-            // --- FIT_CENTER STRATEGY ---
-            // Use Math.min (Fit-Center) to fill as much as possible without cropping margins.
-            // This ensures that the 16:9 preview content is visible within the 4:3 capture box.
-            val baseScale = Math.min(tgtW / logicSrcW, tgtH / logicSrcH)
+            // 2. Apply Compensation (Stretch) to the target ratio (Build 221 Parity Fix)
+            val logicTgtRatio = (orientedTgtW / orientedTgtH) * comp
+            
+            // 3. Calculate Media Ratio (Upright source dimensions)
+            val mediaRatio = baseSrcW / baseSrcH
+            
+            // 4. Calculate Scale (FIT_CENTER strategy like Preview)
+            val baseScale = if (mediaRatio > logicTgtRatio) {
+                orientedTgtW / baseSrcW
+            } else {
+                orientedTgtH / baseSrcH
+            }
+            // ScaleX/Y logic for logic boundary derivation
             val scale = baseScale * zoom
             
-            val offsetX = (logicSrcW - tgtW / scale) / 2f
-            val offsetY = (logicSrcH - tgtH / scale) / 2f
+            // We derive source-space boundaries based on the oriented system
+            val logicSrcW = orientedTgtW / scale
+            val logicSrcH = orientedTgtH / scale
+            
+            val offsetX = (baseSrcW - logicSrcW) / 2f
+            val offsetY = (baseSrcH - logicSrcH) / 2f
 
             val srcStrideArr = width * 4
 
