@@ -236,21 +236,17 @@ class FormatConverterBridge(
             var comp = CameraHook.compensationFactor
             var userRot = CameraHook.rotation
             
-            // [Multi-Process Sync] MiAlgoEngine often runs in a background process.
-            // Force reload from disk to stay in sync with UI sliders.
-            // [Multi-Process Sync] MiAlgoEngine often runs in a background process (e.g. mialgo_service).
-            // Bypass Android's stale SharedPreferences cache by manually reading the XML from absolute paths on disk.
-            try {
-                val config = com.virtucam.data.VirtuCamConfig.getInstance(context ?: android.app.AndroidAppHelper.currentApplication()!!)
-                
-                // Perform a raw file read (Direct Sync) with absolute path fallbacks
-                zoom = config.getFloatDirectSync(context, "zoom_factor", 1.0f)
-                comp = config.getFloatDirectSync(context, "compensation_factor", 1.0f)
-                userRot = config.rotation
-                
-                Log.d(TAG, "DIAGNOSTIC_VIRTUCAM: GLOBAL SYNC CHECK. Comp=$comp, Zoom=$zoom, Rot=$userRot")
-            } catch (e: Exception) {
-                Log.e(TAG, "DIAGNOSTIC_VIRTUCAM: Failed to reload config in MiAlgo: ${e.message}")
+            // --- METADATA COURIER SYNC (Build 220: The 'Truth' Sync) ---
+            // We use the 'Courier' to sync all transformation parameters in real-time.
+            // This bypasses slow disk reads and stale SharedPreferences in background processes.
+            val couriedState = CameraHook.getLatestCouriedState(timestamp)
+            if (couriedState != null) {
+                comp = couriedState.compensationFactor
+                userRot = couriedState.rotation
+                Log.d(TAG, "DIAGNOSTIC_VIRTUCAM: GLOBAL SYNC SUCCESS via Courier. Stretch=$comp, Rot=$userRot (TS $timestamp)")
+            } else {
+                // Fallback for logic consistency
+                Log.d(TAG, "DIAGNOSTIC_VIRTUCAM: GLOBAL SYNC CHECK (Courier Pending). Current Stretch=$comp, Rot=$userRot")
             }
 
             // --- UNIFIED ROTATION SYNC ---

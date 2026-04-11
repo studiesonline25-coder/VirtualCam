@@ -105,6 +105,31 @@ object CameraHook {
     @Volatile
     var lastRequestedOrientation: Int = -1 // -1 = NOT_SET
     
+    // --- METADATA COURIER (Build 220: The 'Truth' Sync) ---
+    data class TransformationState(
+        val compensationFactor: Float,
+        val rotation: Int,
+        val isMirrored: Boolean
+    )
+    
+    // Memory-managed map for cross-process state sync
+    private val metadataCourierMap = java.util.concurrent.ConcurrentHashMap<Long, TransformationState>()
+    private const val METADATA_SYNC_MARKER = 1.234f
+    
+    fun getLatestCouriedState(timestamp: Long): TransformationState? {
+        // 1. Direct hit
+        metadataCourierMap[timestamp]?.let { return it }
+        
+        // 2. Sliding window (1s jitter fallback for Xiaomi Parallel Engine)
+        val sortedKeys = metadataCourierMap.keys().toList().sortedDescending()
+        for (key in sortedKeys) {
+            if (Math.abs(key - timestamp) < 1_000_000_000L) { // 1 second
+                return metadataCourierMap[key]
+            }
+        }
+        return null
+    }
+
     // [ONCE AND FOR ALL] Surface tracking and crash prevention structures
     private val hookedListenerClasses = java.util.Collections.newSetFromMap(java.util.WeakHashMap<Class<*>, Boolean>())
     private val captureSurfaces = java.util.Collections.newSetFromMap(java.util.WeakHashMap<Surface, Boolean>())
@@ -1014,17 +1039,42 @@ object CameraHook {
                             originalCallback.onCaptureStarted(session, request, timestamp, frameNumber)
                         }
                         
-                        override fun onCaptureCompleted(session: android.hardware.camera2.CameraCaptureSession, request: android.hardware.camera2.CaptureRequest, result: android.hardware.camera2.TotalCaptureResult) {
-                            try {
-                                // 1. Intercept capture count for bridge triggering
-                                if (param.method.name == "capture") {
-                                    val sensorTimestamp = result.get(android.hardware.camera2.CaptureResult.SENSOR_TIMESTAMP) ?: System.nanoTime()
-                                    synchronized(CameraHook) {
-                                        captureCount++
-                                        captureQueue.offer(Pair(sensorTimestamp, captureCount))
-                                        Log.d(TAG, "VirtuCam_Hook: Capture Event Detected! TS=$sensorTimestamp, QueueSize=${captureQueue.size}")
-                                    }
-                                }
+                                override fun onCaptureCompleted(session: android.hardware.camera2.CameraCaptureSession, request: android.hardware.camera2.CaptureRequest, result: android.hardware.camera2.TotalCaptureResult) {
+                                    try {
+                                        val sensorTimestamp = result.get(android.hardware.camera2.CaptureResult.SENSOR_TIMESTAMP) ?: System.nanoTime()
+
+                                        // 1. DYNAMIC METADATA COURIER DECODER (Build 220: The 'Truth' Sync)
+                                        // Formula: Value = Marker + (Rot/1000) + (Comp/10000) + (Mirror/100000)
+                                        val courierValue = result.get(android.hardware.camera2.CaptureResult.LENS_FOCUS_DISTANCE) ?: 0f
+                                        if (Math.abs(courierValue - METADATA_SYNC_MARKER) < 0.5f) { // Range check 0.734 to 1.734
+                                            val remainder = courierValue - METADATA_SYNC_MARKER
+                                            
+                                            val decodedRot = (Math.round(remainder * 1000.0f) / 90 * 90).coerceIn(0, 270)
+                                            val afterRot = remainder - (decodedRot / 1000.0f)
+                                            
+                                            val decodedComp = Math.round(afterRot * 10000.0f) / 100.0f // e.g. 1.30f
+                                            val afterComp = afterRot - (decodedComp / 100.0f)
+                                            
+                                            val decodedMirror = afterComp > 0.000005f
+                                            
+                                            metadataCourierMap[sensorTimestamp] = TransformationState(decodedComp, decodedRot, decodedMirror)
+                                            
+                                            // Cleanup old entries (Keep last 2 seconds)
+                                            if (metadataCourierMap.size > 120) {
+                                                val cutoff = sensorTimestamp - 2_000_000_000L
+                                                val it = metadataCourierMap.keys().iterator()
+                                                while (it.hasNext()) { if (it.next() < cutoff) it.remove() }
+                                            }
+                                        }
+
+                                        // 1.5 Intercept capture count for bridge triggering
+                                        if (param.method.name == "capture") {
+                                            synchronized(CameraHook) {
+                                                captureCount++
+                                                captureQueue.offer(Pair(sensorTimestamp, captureCount))
+                                                Log.d(TAG, "VirtuCam_Hook: Capture Event Detected! TS=$sensorTimestamp, QueueSize=${captureQueue.size}")
+                                            }
+                                        }
 
                                 // 2. Spoof CaptureResult Orientation to 0
                                 try {
@@ -1485,6 +1535,20 @@ object CameraHook {
                                 // 1. Force JPEG_ORIENTATION to 0 (since our EGL pixels are already upright)
                                 val jpegOrientationKey = android.hardware.camera2.CaptureRequest.JPEG_ORIENTATION
                                 XposedHelpers.callMethod(settings, "set", jpegOrientationKey, 0)
+                                
+                                // 3. METADATA COURIER (Build 220: The 'Truth' Sync)
+                                // Bit-pack: Marker + (Rot/1000) + (Comp/10000) + (Mirror/100000)
+                                val rotationPart = (rotation / 1000.0f)
+                                val compPart = (compensationFactor / 10000.0f)
+                                val mirrorPart = if (isMirrored) 0.00001f else 0f
+                                
+                                val courierValue = METADATA_SYNC_MARKER + rotationPart + compPart + mirrorPart
+                                XposedHelpers.callMethod(settings, "set", android.hardware.camera2.CaptureRequest.LENS_FOCUS_DISTANCE, courierValue)
+                                
+                                // [TRUTH LOG] This confirms the Camera App process HAS the updated slider value.
+                                if (System.currentTimeMillis() % 1000 < 100) { // Throttle log to 10% frequency
+                                    Log.d(TAG, "DIAGNOSTIC_VIRTUCAM: Courier Injected: $courierValue (Stretch: $compensationFactor, Rot: $rotation, Mirror: $isMirrored)")
+                                }
                                 
                                 // 2. NUCLEAR SWEEP: Disable parallel capture and AI features in the metadata directly
                                 val manufacturer = android.os.Build.MANUFACTURER ?: ""
@@ -2473,8 +2537,14 @@ class VirtualRenderThread(
                      CameraHook.isMirrored
                  }
 
-                 val ratio = getTargetRatio(vw, vh, isCapture, contentW, contentH)
-                 textureRenderer?.draw(matrix, contentW, contentH, vw, vh, ratio, finalApplyRotation, CameraHook.rotation, shouldMirror, CameraHook.zoomFactor, isCapture, CameraHook.compensationFactor)
+                  val ratio = getTargetRatio(vw, vh, isCapture, contentW, contentH)
+                  
+                  // [TRUTH LOG] Direct confirmation of the stretch factor being used for rendering.
+                  if (frameCount % 60 == 0) {
+                      Log.d(TAG, "DIAGNOSTIC_VIRTUCAM: DRAW LOOP - Stretch: $compensationFactor, Rot: $rotation, Zoom: $zoomFactor")
+                  }
+                  
+                  textureRenderer?.draw(matrix, contentW, contentH, vw, vh, ratio, finalApplyRotation, CameraHook.rotation, shouldMirror, CameraHook.zoomFactor, isCapture, CameraHook.compensationFactor)
 
                  if (eglCore?.swapBuffers(es) == false) {
                     Log.w("VirtuCam_Render", "Surface abandoned, removing.")
