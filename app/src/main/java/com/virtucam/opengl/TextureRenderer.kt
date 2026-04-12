@@ -170,22 +170,25 @@ class TextureRenderer(private val isVideo: Boolean = true) {
             
             val userSeenRatio = (orientedViewW.toFloat() / orientedViewH.toFloat()) * compensationFactor
             
-            // [Zero-Error Accuracy] 2.1 Calculate Effective Media Ratio
-            // If the media is being rotated 90/270, its width and height are effectively swapped.
-            val effectiveMediaRatio = if (totalRotation % 180 != 0) {
-                videoHeight.toFloat() / videoWidth.toFloat()
+            // [Build 269 Fix] Strictly decouple media/target ratios
+            val effectiveMediaRatio: Float
+            val logicTargetRatio: Float
+
+            if (isCapture) {
+                // [Build 213 Parity] For captures, Android provides pre-oriented buffers.
+                // We utilize RAW dimensions to prevent 'Double Swapping' errors.
+                effectiveMediaRatio = videoWidth.toFloat() / videoHeight.toFloat()
+                logicTargetRatio = viewWidth.toFloat() / viewHeight.toFloat()
             } else {
-                videoWidth.toFloat() / videoHeight.toFloat()
+                // For preview/viewfinder, we still utilize orientation-aware logic to handle screen rotation.
+                effectiveMediaRatio = if (totalRotation % 180 != 0) {
+                    videoHeight.toFloat() / videoWidth.toFloat()
+                } else {
+                    videoWidth.toFloat() / videoHeight.toFloat()
+                }
+                logicTargetRatio = userSeenRatio
             }
-            
-            // [UNIFIED FIT] Use a consolidated logic for both preview and capture.
-            // We establish the 'Target Aspect' we want to fill, then shrink the media to fit inside it.
-            val logicTargetRatio = if (isCapture) {
-                if (totalRotation % 180 != 0) viewHeight.toFloat() / viewWidth.toFloat() 
-                else viewWidth.toFloat() / viewHeight.toFloat()
-            } else {
-                userSeenRatio
-            }
+
 
             var scaleX: Float
             var scaleY: Float
@@ -199,7 +202,8 @@ class TextureRenderer(private val isVideo: Boolean = true) {
                     scaleX = 1.0f
                     scaleY = logicTargetRatio / effectiveMediaRatio
                 }
-                Log.d("DIAGNOSTIC_VIRTUCAM", "Draw: Capture RESTORED (213) -> MediaRatio=$effectiveMediaRatio, Target=$logicTargetRatio, ScaleX=$scaleX, ScaleY=$scaleY")
+                Log.d("DIAGNOSTIC_VIRTUCAM", "Draw: Capture RESTORED (213 Path / 269 Fix) -> MediaRatio=$effectiveMediaRatio, Target=$logicTargetRatio, ScaleX=$scaleX, ScaleY=$scaleY")
+
             } else {
                 // [Build 267 Preservation] FIT_CENTER: Shrink to fit inside the preview box
                 if (effectiveMediaRatio > logicTargetRatio) {
