@@ -2458,11 +2458,21 @@ class VirtualRenderThread(
                     bitmap.recycle()
                     
                     val matrix = FloatArray(16)
-                    Matrix.setIdentityM(matrix, 0)
                     
                     while (isRunning) {
                         frameCount++
                         if (frameCount % 10 == 0) CameraHook.loadConfiguration()
+
+                        val timeMs = System.currentTimeMillis()
+                        val scale = 1.0f + (Math.sin(timeMs / 500.0) * 0.008f).toFloat() 
+                        val trX = (Math.sin(timeMs / 200.0) * 0.005f).toFloat()
+                        val trY = (Math.cos(timeMs / 330.0) * 0.005f).toFloat()
+
+                        Matrix.setIdentityM(matrix, 0)
+                        Matrix.translateM(matrix, 0, trX, trY, 0f)
+                        Matrix.translateM(matrix, 0, 0.5f, 0.5f, 0f)
+                        Matrix.scaleM(matrix, 0, scale, scale, 1f)
+                        Matrix.translateM(matrix, 0, -0.5f, -0.5f, 0f)
 
                         if (!drawToAllSurfaces(matrix, staticImageW, staticImageH, exifRotation)) break
                         
