@@ -1626,11 +1626,19 @@ object CameraHook {
                 val h = XposedHelpers.callMethod(reader, "getHeight") as? Int ?: 0
                 
                 surfaceFormats[surface] = format
-                captureSurfaces.add(surface) 
+                // [Browser Preview Fix] Only classify JPEG ImageReaders as capture surfaces.
+                // Browsers (Phoenix, Chrome) create YUV/format-35 ImageReaders for LIVE preview
+                // streams — these must NOT get the 90° capture rotation.
+                if (format == 256) { // JPEG only
+                    captureSurfaces.add(surface)
+                    Log.d(TAG, "VirtuCam_Hook: Classified ImageReader as CAPTURE (JPEG) ${w}x${h}")
+                } else {
+                    Log.d(TAG, "VirtuCam_Hook: Classified ImageReader as PREVIEW (format=$format) ${w}x${h}")
+                }
                 
                 if (w > 0 && h > 0) {
                     surfaceSizes[surface] = Pair(w, h)
-                    Log.d(TAG, "VirtuCam_Hook: Tracked ImageReader surface ${w}x${h} format=$format")
+                    Log.d(TAG, "VirtuCam_Hook: Tracked ImageReader surface ${w}x${h} format=$format isCapture=${format == 256}")
                 }
             }
         })
