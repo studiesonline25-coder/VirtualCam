@@ -2559,6 +2559,7 @@ class VirtualRenderThread(
                   
                   textureRenderer?.draw(matrix, contentW, contentH, vw, vh, ratio, finalApplyRotation, CameraHook.rotation, shouldMirror, CameraHook.zoomFactor, isCapture, CameraHook.compensationFactor)
 
+                 eglCore?.setPresentationTime(es, System.nanoTime())
                  if (eglCore?.swapBuffers(es) == false) {
                     Log.w("VirtuCam_Render", "Surface abandoned, removing.")
                     it.remove()
