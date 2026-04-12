@@ -38,8 +38,24 @@ class TextureRenderer(private val isVideo: Boolean = true) {
             precision mediump float;
             varying vec2 vTextureCoord;
             uniform samplerExternalOES sTexture;
+            uniform int uIsBackground;
+            const float blurSize = 0.02; // Blur radius
             void main() {
-                gl_FragColor = texture2D(sTexture, vTextureCoord);
+                if (uIsBackground == 1) {
+                    vec4 sum = vec4(0.0);
+                    sum += texture2D(sTexture, vec2(vTextureCoord.x - blurSize, vTextureCoord.y - blurSize));
+                    sum += texture2D(sTexture, vec2(vTextureCoord.x, vTextureCoord.y - blurSize)) * 2.0;
+                    sum += texture2D(sTexture, vec2(vTextureCoord.x + blurSize, vTextureCoord.y - blurSize));
+                    sum += texture2D(sTexture, vec2(vTextureCoord.x - blurSize, vTextureCoord.y)) * 2.0;
+                    sum += texture2D(sTexture, vec2(vTextureCoord.x, vTextureCoord.y)) * 4.0;
+                    sum += texture2D(sTexture, vec2(vTextureCoord.x + blurSize, vTextureCoord.y)) * 2.0;
+                    sum += texture2D(sTexture, vec2(vTextureCoord.x - blurSize, vTextureCoord.y + blurSize));
+                    sum += texture2D(sTexture, vec2(vTextureCoord.x, vTextureCoord.y + blurSize)) * 2.0;
+                    sum += texture2D(sTexture, vec2(vTextureCoord.x + blurSize, vTextureCoord.y + blurSize));
+                    gl_FragColor = vec4((sum / 16.0).rgb * 0.4, 1.0);
+                } else {
+                    gl_FragColor = texture2D(sTexture, vTextureCoord);
+                }
             }
         """
 
@@ -48,8 +64,24 @@ class TextureRenderer(private val isVideo: Boolean = true) {
             precision mediump float;
             varying vec2 vTextureCoord;
             uniform sampler2D sTexture;
+            uniform int uIsBackground;
+            const float blurSize = 0.02; // Blur radius
             void main() {
-                gl_FragColor = texture2D(sTexture, vTextureCoord);
+                if (uIsBackground == 1) {
+                    vec4 sum = vec4(0.0);
+                    sum += texture2D(sTexture, vec2(vTextureCoord.x - blurSize, vTextureCoord.y - blurSize));
+                    sum += texture2D(sTexture, vec2(vTextureCoord.x, vTextureCoord.y - blurSize)) * 2.0;
+                    sum += texture2D(sTexture, vec2(vTextureCoord.x + blurSize, vTextureCoord.y - blurSize));
+                    sum += texture2D(sTexture, vec2(vTextureCoord.x - blurSize, vTextureCoord.y)) * 2.0;
+                    sum += texture2D(sTexture, vec2(vTextureCoord.x, vTextureCoord.y)) * 4.0;
+                    sum += texture2D(sTexture, vec2(vTextureCoord.x + blurSize, vTextureCoord.y)) * 2.0;
+                    sum += texture2D(sTexture, vec2(vTextureCoord.x - blurSize, vTextureCoord.y + blurSize));
+                    sum += texture2D(sTexture, vec2(vTextureCoord.x, vTextureCoord.y + blurSize)) * 2.0;
+                    sum += texture2D(sTexture, vec2(vTextureCoord.x + blurSize, vTextureCoord.y + blurSize));
+                    gl_FragColor = vec4((sum / 16.0).rgb * 0.4, 1.0);
+                } else {
+                    gl_FragColor = texture2D(sTexture, vTextureCoord);
+                }
             }
         """
         
@@ -83,6 +115,7 @@ class TextureRenderer(private val isVideo: Boolean = true) {
     private var muSTMatrixHandle = 0
     private var maPositionHandle = 0
     private var maTextureHandle = 0
+    private var muIsBackgroundHandle = 0
     
     internal var textureId = -1
     private var frameCount = 0
@@ -120,6 +153,7 @@ class TextureRenderer(private val isVideo: Boolean = true) {
         maTextureHandle = GLES20.glGetAttribLocation(program, "aTextureCoord")
         muMVPMatrixHandle = GLES20.glGetUniformLocation(program, "uMVPMatrix")
         muSTMatrixHandle = GLES20.glGetUniformLocation(program, "uSTMatrix")
+        muIsBackgroundHandle = GLES20.glGetUniformLocation(program, "uIsBackground")
 
         // Create texture
         val textures = IntArray(1)
@@ -156,102 +190,6 @@ class TextureRenderer(private val isVideo: Boolean = true) {
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(target, textureId)
 
-        // Compute aspect ratio scaling (FIT_CENTER) to prevent stretching
-        Matrix.setIdentityM(mvpMatrix, 0)
-        
-        if (videoWidth > 0 && videoHeight > 0 && viewWidth > 0 && viewHeight > 0) {
-            // [Zero-Error Accuracy] 1. Calculate Total Rotation
-            val totalRotation = (rotationDegrees + userRotation) % 360
-            
-            // [Zero-Error Accuracy] 2. Calculate Oriented Viewport (What the user actually sees)
-            // If the sensor is rotated 90/270 (Portrait), the user sees the surface's height as width.
-            val orientedViewW = if (totalRotation % 180 != 0) viewHeight else viewWidth
-            val orientedViewH = if (totalRotation % 180 != 0) viewWidth else viewHeight
-            
-            val userSeenRatio = (orientedViewW.toFloat() / orientedViewH.toFloat()) * compensationFactor
-            
-            // [Build 269 Fix] Strictly decouple media/target ratios
-            val effectiveMediaRatio: Float
-            val logicTargetRatio: Float
-
-            if (isCapture) {
-                // [Build 270 / Build 213 Parity] Single-Swap: rotation-aware MEDIA, raw TARGET.
-                // CameraHook's WYSIWYG fix passes rotation=90 for portrait-to-landscape captures.
-                // We must transpose the media ratio to match, but NOT the target ratio.
-                // Build 268 broke by swapping BOTH (double swap). Build 269 broke by swapping NEITHER.
-                effectiveMediaRatio = if (totalRotation % 180 != 0) {
-                    videoHeight.toFloat() / videoWidth.toFloat()
-                } else {
-                    videoWidth.toFloat() / videoHeight.toFloat()
-                }
-                logicTargetRatio = viewWidth.toFloat() / viewHeight.toFloat()
-            } else {
-                // For preview/viewfinder, we still utilize orientation-aware logic to handle screen rotation.
-                effectiveMediaRatio = if (totalRotation % 180 != 0) {
-                    videoHeight.toFloat() / videoWidth.toFloat()
-                } else {
-                    videoWidth.toFloat() / videoHeight.toFloat()
-                }
-                logicTargetRatio = userSeenRatio
-            }
-
-
-            var scaleX: Float
-            var scaleY: Float
-
-            if (isCapture) {
-                // [Build 213 Restoration] CENTER_CROP: Fill the entire capture buffer to ensure parity
-                if (effectiveMediaRatio > logicTargetRatio) {
-                    scaleY = 1.0f
-                    scaleX = effectiveMediaRatio / logicTargetRatio
-                } else {
-                    scaleX = 1.0f
-                    scaleY = logicTargetRatio / effectiveMediaRatio
-                }
-                Log.d("DIAGNOSTIC_VIRTUCAM", "Draw: Capture B270 (SingleSwap) -> MediaRatio=$effectiveMediaRatio, Target=$logicTargetRatio, ScaleX=$scaleX, ScaleY=$scaleY, TotalRot=$totalRotation")
-
-            } else {
-                // [Build 267 Preservation] FIT_CENTER: Shrink to fit inside the preview box
-                if (effectiveMediaRatio > logicTargetRatio) {
-                    scaleX = 1.0f
-                    scaleY = logicTargetRatio / effectiveMediaRatio
-                } else {
-                    scaleX = effectiveMediaRatio / logicTargetRatio
-                    scaleY = 1.0f
-                }
-                // Keep the anti-zoom clamp for previews
-                scaleX = scaleX.coerceAtMost(1.0f)
-                scaleY = scaleY.coerceAtMost(1.0f)
-            }
-
-
-            // Apply global zoom and compensation (if user still uses the slider)
-            scaleX *= zoomFactor
-            scaleY *= zoomFactor
-
-            // [Zero-Error Accuracy] 3. Apply Transformations
-            // A: Rotate the quad to match sensor/user orientation
-            if (totalRotation != 0) {
-                Matrix.rotateM(mvpMatrix, 0, totalRotation.toFloat(), 0f, 0f, 1f)
-            }
-
-            // B: Mirroring (Flip the axis that is physically horizontal on the screen)
-            val flipX = isMirrored && (totalRotation % 180 == 0)
-            val flipY = isMirrored && (totalRotation % 180 != 0)
-
-            // C: Scale to fit the orientation system
-            // If rotated 90/270, the quad's local X is the screen's Y, and local Y is screen X.
-            if (totalRotation % 180 != 0) {
-                Matrix.scaleM(mvpMatrix, 0, if (flipX) -scaleY else scaleY, if (flipY) -scaleX else scaleX, 1f)
-            } else {
-                Matrix.scaleM(mvpMatrix, 0, if (flipX) -scaleX else scaleX, if (flipY) -scaleY else scaleY, 1f)
-            }
-            
-            if (frameCount++ % 60 == 0) {
-                Log.d("VirtuCam_Render", "Draw: media=${videoWidth}x${videoHeight} view=${viewWidth}x${viewHeight} rot=$totalRotation scales=${scaleX}x${scaleY}")
-            }
-        }
-
         // Copy transform matrix from SurfaceTexture which Android natively encodes with EXIF Video rotators
         System.arraycopy(transformMatrix, 0, stMatrix, 0, 16)
 
@@ -264,11 +202,106 @@ class TextureRenderer(private val isVideo: Boolean = true) {
         GLES20.glVertexAttribPointer(maTextureHandle, 2, GLES20.GL_FLOAT, false, 0, textureBuffer)
         GLES20.glEnableVertexAttribArray(maTextureHandle)
 
-        GLES20.glUniformMatrix4fv(muSTMatrixHandle, 1, false, stMatrix, 0)
-        GLES20.glUniformMatrix4fv(muMVPMatrixHandle, 1, false, mvpMatrix, 0)
+        if (videoWidth > 0 && videoHeight > 0 && viewWidth > 0 && viewHeight > 0) {
+            // [Zero-Error Accuracy] 1. Calculate Total Rotation
+            val totalRotation = (rotationDegrees + userRotation) % 360
+            
+            // [Zero-Error Accuracy] 2. Calculate Oriented Viewport (What the user actually sees)
+            val orientedViewW = if (totalRotation % 180 != 0) viewHeight else viewWidth
+            val orientedViewH = if (totalRotation % 180 != 0) viewWidth else viewHeight
+            
+            val userSeenRatio = (orientedViewW.toFloat() / orientedViewH.toFloat()) * compensationFactor
+            
+            val effectiveMediaRatio: Float = if (totalRotation % 180 != 0) {
+                videoHeight.toFloat() / videoWidth.toFloat()
+            } else {
+                videoWidth.toFloat() / videoHeight.toFloat()
+            }
+            
+            val logicTargetRatio: Float = if (isCapture) {
+                viewWidth.toFloat() / viewHeight.toFloat()
+            } else {
+                userSeenRatio
+            }
 
-        // Draw quad
-        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+            // --- HELPER FUNCTION TO DRAW QUAD ---
+            fun drawQuad(scaleX: Float, scaleY: Float, isBackground: Boolean) {
+                Matrix.setIdentityM(mvpMatrix, 0)
+                
+                // A: Rotate the quad to match sensor/user orientation
+                if (totalRotation != 0) {
+                    Matrix.rotateM(mvpMatrix, 0, totalRotation.toFloat(), 0f, 0f, 1f)
+                }
+
+                // B: Mirroring
+                val flipX = isMirrored && (totalRotation % 180 == 0)
+                val flipY = isMirrored && (totalRotation % 180 != 0)
+
+                // C: Scale to fit the orientation system
+                val finalScaleX = (if (flipX) -scaleX else scaleX) * zoomFactor
+                val finalScaleY = (if (flipY) -scaleY else scaleY) * zoomFactor
+
+                if (totalRotation % 180 != 0) {
+                    Matrix.scaleM(mvpMatrix, 0, finalScaleY, finalScaleX, 1f)
+                } else {
+                    Matrix.scaleM(mvpMatrix, 0, finalScaleX, finalScaleY, 1f)
+                }
+                
+                GLES20.glUniform1i(muIsBackgroundHandle, if (isBackground) 1 else 0)
+                GLES20.glUniformMatrix4fv(muSTMatrixHandle, 1, false, stMatrix, 0)
+                GLES20.glUniformMatrix4fv(muMVPMatrixHandle, 1, false, mvpMatrix, 0)
+                
+                GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+            }
+
+            // === 1. DRAW BACKGROUND (Edge-Fill via CENTER_CROP) ===
+            var bgScaleX = 1.0f
+            var bgScaleY = 1.0f
+            
+            if (effectiveMediaRatio > logicTargetRatio) {
+                bgScaleY = 1.0f
+                bgScaleX = effectiveMediaRatio / logicTargetRatio
+            } else {
+                bgScaleX = 1.0f
+                bgScaleY = logicTargetRatio / effectiveMediaRatio
+            }
+            
+            drawQuad(bgScaleX, bgScaleY, true)
+
+            // === 2. DRAW FOREGROUND (Video layer via FIT_CENTER) ===
+            var fgScaleX = 1.0f
+            var fgScaleY = 1.0f
+            
+            if (isCapture) {
+                // Restoration of Build 213: Capture mode strictly fills the buffer perfectly.
+                fgScaleX = bgScaleX
+                fgScaleY = bgScaleY
+            } else {
+                // Preview mode uses FIT_CENTER
+                if (effectiveMediaRatio > logicTargetRatio) {
+                    fgScaleX = 1.0f
+                    fgScaleY = logicTargetRatio / effectiveMediaRatio
+                } else {
+                    fgScaleX = effectiveMediaRatio / logicTargetRatio
+                    fgScaleY = 1.0f
+                }
+                fgScaleX = fgScaleX.coerceAtMost(1.0f)
+                fgScaleY = fgScaleY.coerceAtMost(1.0f)
+            }
+            
+            drawQuad(fgScaleX, fgScaleY, false)
+
+            if (frameCount++ % 60 == 0) {
+                Log.d("VirtuCam_Render", "Draw Edge-Fill: media=${videoWidth}x${videoHeight} view=${viewWidth}x${viewHeight} rot=$totalRotation fg_scales=${fgScaleX}x${fgScaleY} bg_scales=${bgScaleX}x${bgScaleY}")
+            }
+        } else {
+            // Draw default if dimensions are zero
+            Matrix.setIdentityM(mvpMatrix, 0)
+            GLES20.glUniform1i(muIsBackgroundHandle, 0)
+            GLES20.glUniformMatrix4fv(muSTMatrixHandle, 1, false, stMatrix, 0)
+            GLES20.glUniformMatrix4fv(muMVPMatrixHandle, 1, false, mvpMatrix, 0)
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+        }
 
         GLES20.glDisableVertexAttribArray(maPositionHandle)
         GLES20.glDisableVertexAttribArray(maTextureHandle)
@@ -337,3 +370,4 @@ class TextureRenderer(private val isVideo: Boolean = true) {
         return program
     }
 }
+
