@@ -99,6 +99,9 @@ object CameraHook {
     @Volatile
     var isLivenessEnabled: Boolean = true
 
+    // Signal for VirtualRenderThread to recreate EGL surfaces when browser renegotiates resolution
+    val pendingSurfaceResize = java.util.concurrent.atomic.AtomicBoolean(false)
+
     @Volatile
     var isGeneratingJpeg: Boolean = false
 
@@ -1665,7 +1668,13 @@ object CameraHook {
                         val st = param.thisObject as? SurfaceTexture ?: return
                         val w = param.args[0] as Int
                         val h = param.args[1] as Int
+                        val oldSize = surfaceTextureSizes[st]
                         surfaceTextureSizes[st] = Pair(w, h)
+                        // Signal resize only if dimensions actually changed and render threads are active
+                        if (oldSize != null && (oldSize.first != w || oldSize.second != h) && renderThreads.isNotEmpty()) {
+                            Log.e(TAG, "VirtuCam_Hook: SurfaceTexture RESIZED from ${oldSize.first}x${oldSize.second} -> ${w}x${h} - signaling EGL recreate")
+                            pendingSurfaceResize.set(true)
+                        }
                     }
                 }
             )
@@ -2328,6 +2337,8 @@ class VirtualRenderThread(
     private var eglCore: EglCore? = null
     // Triple: EGLSurface, isCapture, format
     private val eglSurfaceTargets = mutableListOf<Triple<android.opengl.EGLSurface, Boolean, Int>>()
+    // Parallel list of original Surface objects for EGL surface recreation on resize
+    private val originalSurfaceBackings = mutableListOf<Surface>()
     private var textureRenderer: TextureRenderer? = null
     
     private var videoPlayer: VideoPlayer? = null
@@ -2368,6 +2379,7 @@ class VirtualRenderThread(
                             es = eglCore!!.createWindowSurface(surface)
                             if (es != null) {
                                 eglSurfaceTargets.add(Triple(es, targetTriple.second, targetTriple.third))
+                                originalSurfaceBackings.add(surface)
                                 break
                             }
                         } catch (e: Exception) {
@@ -2538,6 +2550,10 @@ class VirtualRenderThread(
     }
 
     private fun drawToAllSurfaces(matrix: FloatArray, contentW: Int, contentH: Int, explicitRotationOffset: Int = 0): Boolean {
+        // [Dynamic Resize] Recreate EGL surfaces if browser renegotiated resolution
+        if (CameraHook.pendingSurfaceResize.compareAndSet(true, false)) {
+            recreateEglSurfaces()
+        }
         val it = eglSurfaceTargets.iterator()
         while (it.hasNext()) {
             val it_triple = it.next()
@@ -2588,6 +2604,46 @@ class VirtualRenderThread(
         return eglSurfaceTargets.isNotEmpty()
     }
 
+    /**
+     * Recreate all EGL surfaces from their original Surface backings.
+     * Called when the browser renegotiates the video stream resolution
+     * (e.g. Veriff resizes from 1280x720 → 720x720 via applyConstraints).
+     * The new EGL surface picks up the updated native window dimensions.
+     */
+    private fun recreateEglSurfaces() {
+        Log.d("VirtuCam_Render", "[Dynamic Resize] Recreating EGL surfaces...")
+        val oldTargets = ArrayList(eglSurfaceTargets)
+        val oldSurfaces = ArrayList(originalSurfaceBackings)
+        eglSurfaceTargets.clear()
+        originalSurfaceBackings.clear()
+
+        for (i in oldTargets.indices) {
+            val old = oldTargets[i]
+            val backing = oldSurfaces.getOrNull(i)
+            try {
+                eglCore?.releaseSurface(old.first)
+            } catch (_: Exception) {}
+
+            if (backing != null && backing.isValid) {
+                try {
+                    val newEs = eglCore!!.createWindowSurface(backing)
+                    val vw = eglCore!!.querySurface(newEs, android.opengl.EGL14.EGL_WIDTH)
+                    val vh = eglCore!!.querySurface(newEs, android.opengl.EGL14.EGL_HEIGHT)
+                    Log.d("VirtuCam_Render", "[Dynamic Resize] Surface $i recreated: ${vw}x${vh}")
+                    eglSurfaceTargets.add(Triple(newEs, old.second, old.third))
+                    originalSurfaceBackings.add(backing)
+                } catch (e: Exception) {
+                    Log.e("VirtuCam_Render", "[Dynamic Resize] Failed to recreate surface $i", e)
+                }
+            }
+        }
+
+        if (eglSurfaceTargets.isNotEmpty()) {
+            eglCore?.makeCurrent(eglSurfaceTargets[0].first)
+        }
+        Log.d("VirtuCam_Render", "[Dynamic Resize] Done. ${eglSurfaceTargets.size} surfaces active.")
+    }
+
     private fun releaseResources() {
         isRunning = false
         videoPlayer?.stop()
@@ -2599,6 +2655,7 @@ class VirtualRenderThread(
             try { eglCore?.releaseSurface(it.first) } catch (_: Exception) {}
         }
         eglSurfaceTargets.clear()
+        originalSurfaceBackings.clear()
         
         textureRenderer?.release()
         eglCore?.release()
