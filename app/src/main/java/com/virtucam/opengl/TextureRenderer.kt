@@ -190,19 +190,30 @@ class TextureRenderer(private val isVideo: Boolean = true) {
             var scaleX: Float
             var scaleY: Float
 
-            if (effectiveMediaRatio > logicTargetRatio) {
-                // Media is relatively wider than the target box -> Shrink Height
-                scaleX = 1.0f
-                scaleY = logicTargetRatio / effectiveMediaRatio
-            } else {
-                // Media is relatively taller than the target box -> Shrink Width
-                scaleX = effectiveMediaRatio / logicTargetRatio
-                scaleY = 1.0f
-            }
-            
             if (isCapture) {
-                Log.d("DIAGNOSTIC_VIRTUCAM", "Draw: Capture UNIFIED -> MediaRatio=$effectiveMediaRatio, Target=$logicTargetRatio, ScaleX=$scaleX, ScaleY=$scaleY")
+                // [Build 213 Restoration] CENTER_CROP: Fill the entire capture buffer to ensure parity
+                if (effectiveMediaRatio > logicTargetRatio) {
+                    scaleY = 1.0f
+                    scaleX = effectiveMediaRatio / logicTargetRatio
+                } else {
+                    scaleX = 1.0f
+                    scaleY = logicTargetRatio / effectiveMediaRatio
+                }
+                Log.d("DIAGNOSTIC_VIRTUCAM", "Draw: Capture RESTORED (213) -> MediaRatio=$effectiveMediaRatio, Target=$logicTargetRatio, ScaleX=$scaleX, ScaleY=$scaleY")
+            } else {
+                // [Build 267 Preservation] FIT_CENTER: Shrink to fit inside the preview box
+                if (effectiveMediaRatio > logicTargetRatio) {
+                    scaleX = 1.0f
+                    scaleY = logicTargetRatio / effectiveMediaRatio
+                } else {
+                    scaleX = effectiveMediaRatio / logicTargetRatio
+                    scaleY = 1.0f
+                }
+                // Keep the anti-zoom clamp for previews
+                scaleX = scaleX.coerceAtMost(1.0f)
+                scaleY = scaleY.coerceAtMost(1.0f)
             }
+
 
             // Apply global zoom and compensation (if user still uses the slider)
             scaleX *= zoomFactor
