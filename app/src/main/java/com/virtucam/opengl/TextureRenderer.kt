@@ -175,9 +175,15 @@ class TextureRenderer(private val isVideo: Boolean = true) {
             val logicTargetRatio: Float
 
             if (isCapture) {
-                // [Build 213 Parity] For captures, Android provides pre-oriented buffers.
-                // We utilize RAW dimensions to prevent 'Double Swapping' errors.
-                effectiveMediaRatio = videoWidth.toFloat() / videoHeight.toFloat()
+                // [Build 270 / Build 213 Parity] Single-Swap: rotation-aware MEDIA, raw TARGET.
+                // CameraHook's WYSIWYG fix passes rotation=90 for portrait-to-landscape captures.
+                // We must transpose the media ratio to match, but NOT the target ratio.
+                // Build 268 broke by swapping BOTH (double swap). Build 269 broke by swapping NEITHER.
+                effectiveMediaRatio = if (totalRotation % 180 != 0) {
+                    videoHeight.toFloat() / videoWidth.toFloat()
+                } else {
+                    videoWidth.toFloat() / videoHeight.toFloat()
+                }
                 logicTargetRatio = viewWidth.toFloat() / viewHeight.toFloat()
             } else {
                 // For preview/viewfinder, we still utilize orientation-aware logic to handle screen rotation.
@@ -202,7 +208,7 @@ class TextureRenderer(private val isVideo: Boolean = true) {
                     scaleX = 1.0f
                     scaleY = logicTargetRatio / effectiveMediaRatio
                 }
-                Log.d("DIAGNOSTIC_VIRTUCAM", "Draw: Capture RESTORED (213 Path / 269 Fix) -> MediaRatio=$effectiveMediaRatio, Target=$logicTargetRatio, ScaleX=$scaleX, ScaleY=$scaleY")
+                Log.d("DIAGNOSTIC_VIRTUCAM", "Draw: Capture B270 (SingleSwap) -> MediaRatio=$effectiveMediaRatio, Target=$logicTargetRatio, ScaleX=$scaleX, ScaleY=$scaleY, TotalRot=$totalRotation")
 
             } else {
                 // [Build 267 Preservation] FIT_CENTER: Shrink to fit inside the preview box
