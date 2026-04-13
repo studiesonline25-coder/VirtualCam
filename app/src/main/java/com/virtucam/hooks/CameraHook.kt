@@ -2559,7 +2559,9 @@ class VirtualRenderThread(
                  // [HARDWARE PARITY FIX] Always rotate our internal upright video by the 
                  // physical sensor orientation (e.g. 270) so that it is written sideways
                  // into the buffer, matching real hardware pixel layout!
-                 val applyRotation = sensorOrientation
+                 // In OpenGL, rotating by (360 - sensorOrientation) puts the buffer in the correct physical layout.
+                 val applyRotation = (360 - sensorOrientation) % 360
+
 
                  
                  // Removed obsolete WYSIWYG hack.
