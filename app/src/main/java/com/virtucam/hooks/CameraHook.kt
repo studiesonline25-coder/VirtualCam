@@ -64,6 +64,8 @@ object CameraHook {
 
     @Volatile
     private var activeCameraId: String = "0"
+    @Volatile
+    var xiaomiRequestedOrientation: Int = -1
     
     // Maps original surfaces to their formats for correct rendering
     internal val surfaceFormats = java.util.concurrent.ConcurrentHashMap<Surface, Int>()
@@ -1281,6 +1283,12 @@ object CameraHook {
                         keyName.contains("rotation", true) ||
                         keyName.contains("control.mode", true)) {
                         Log.e(TAG, "SURVEILLANCE: Request.set($keyName) -> $value")
+                        
+                        // [DYNAMIC ROTATION PARITY]
+                        // Xiaomi Native camera uses this to tell the HAL how to orient the buffer.
+                        if (keyName == "xiaomi.device.orientation") {
+                            xiaomiRequestedOrientation = value as? Int ?: -1
+                        }
                     }
                 } catch (_: Throwable) {}
             }
@@ -2609,9 +2617,13 @@ class VirtualRenderThread(
                  val vh = eglCore!!.querySurface(es, android.opengl.EGL14.EGL_HEIGHT)
                  
                   // [ABSOLUTE HARDWARE PARITY] 
-                  // We always pass the real physical sensor orientation to the renderer.
-                  // The renderer will mimic the "Sideways" pixels of the real hardware.
-                  val parityOrientation = sensorOrientation
+                  // If the app (like Native Camera) sends a Xiaomi orientation request, we follow it.
+                  // Otherwise (like Browsers), we fall back to the raw sensor orientation (90/270).
+                  val parityOrientation = if (CameraHook.xiaomiRequestedOrientation != -1) {
+                      CameraHook.xiaomiRequestedOrientation
+                  } else {
+                      sensorOrientation
+                  }
                   
                   // Combine with any media-specific EXIF rotation or user adjustments
                   val finalUserRotation = CameraHook.rotation + explicitRotationOffset
