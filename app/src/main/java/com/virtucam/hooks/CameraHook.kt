@@ -1676,14 +1676,17 @@ object CameraHook {
                         
                         // [TOTAL SURVEILLANCE] Hook getTransformMatrix to see how hardware rotates preview
                         XposedHelpers.findAndHookMethod(st.javaClass, "getTransformMatrix", FloatArray::class.java, object : XC_MethodHook() {
+                            private var localFrameCount = 0
                             override fun afterHookedMethod(innerParam: MethodHookParam) {
                                 val matrix = innerParam.args[0] as? FloatArray ?: return
-                                if (frameCount % 300 == 0) { // Throttled logging
+                                localFrameCount++
+                                if (localFrameCount % 300 == 0) { // Throttled logging
                                     val mStr = matrix.joinToString(", ") { String.format("%.2f", it) }
                                     Log.e(TAG, "SURVEILLANCE: Real ST Matrix -> [$mStr]")
                                 }
                             }
                         })
+
 
                         val size = surfaceTextureSizes[st]
                         if (size != null) {
